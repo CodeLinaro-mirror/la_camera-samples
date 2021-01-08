@@ -1,5 +1,5 @@
 /*
-# Copyright (c) 2020 Qualcomm Innovation Center, Inc.
+# Copyright (c) 2020-2021 Qualcomm Innovation Center, Inc.
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted (subject to the limitations in the
@@ -37,7 +37,6 @@ package com.example.android.camera2.video
 import android.content.ContentValues
 import android.content.Context
 import android.media.*
-import android.net.Uri
 import android.os.Environment
 import android.provider.MediaStore
 import android.util.Log
@@ -50,6 +49,7 @@ import java.io.FileDescriptor
 import java.nio.ByteBuffer
 import java.text.SimpleDateFormat
 import java.util.*
+import java.util.concurrent.Semaphore
 
 
 class MediaCodecRecorder(private val context: Context,
@@ -72,10 +72,8 @@ class MediaCodecRecorder(private val context: Context,
     private var muxerTrackCount = 0
     val muxerLock = Mutex()
 
-    private val videoStopSyncObject = Object()
-    private val audioStopSyncObject = Object()
+    private val audioVideoSemaphore = Semaphore(2)
     private var currentVideoFilePath: String? = null
-    private var currentVideoFileUri: Uri? = null
 
     private var videoMimeType: String = when (streamInfo.encoding) {
         "H264" -> "video/avc"
@@ -94,12 +92,14 @@ class MediaCodecRecorder(private val context: Context,
             setInteger(MediaFormat.KEY_BIT_RATE, streamInfo.bitrate * 1_000_000)
             setInteger(MediaFormat.KEY_FRAME_RATE, streamInfo.fps)
             when(streamInfo.rcmode) {
-                0, 3, 4 -> setInteger("vendor.qti-ext-enc-bitrate-mode.value", streamInfo.rcmode)
-                1, 2 -> setInteger(MediaFormat.KEY_BITRATE_MODE, streamInfo.rcmode);
-                5 -> setInteger(MediaFormat.KEY_BITRATE_MODE, ((0x7F000000).toInt() + 1))
-                6 -> setInteger(MediaFormat.KEY_BITRATE_MODE, ((0x7F000000).toInt() + 2))
+                0, 1, 2 ,3, 4 -> setInteger("vendor.qti-ext-enc-bitrate-mode.value", streamInfo.rcmode)
+                5 -> setInteger("vendor.qti-ext-enc-bitrate-mode.value", ((0x7F000001).toInt()))
+                6 -> setInteger("vendor.qti-ext-enc-bitrate-mode.value", ((0x7F000002).toInt()))
                 else -> Log.e(TAG, "Not a valid RC Mode")
             }
+            // Real Time Priority
+            setInteger(MediaFormat.KEY_PRIORITY, 0)
+
             setInteger("vendor.qti-ext-enc-qp-range.qp-i-min", streamInfo.minqp_i_frame);
             setInteger("vendor.qti-ext-enc-qp-range.qp-i-max", streamInfo.maxqp_i_frame);
             setInteger("vendor.qti-ext-enc-qp-range.qp-b-min", streamInfo.minqp_b_frame);
@@ -117,6 +117,15 @@ class MediaCodecRecorder(private val context: Context,
             setInteger("vendor.qti-ext-enc-initial-qp.qp-p", streamInfo.initqp_p_frame);
 
             setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, streamInfo.interval_iframe)
+            // Calculate P frames based on FPS and I frame Interval
+            var p_frame_cnt = 0
+            if (streamInfo.interval_iframe > 0) {
+                p_frame_cnt = (streamInfo.fps * streamInfo.interval_iframe) -1
+            }
+            setInteger("vendor.qti-ext-enc-intra-period.n-pframes", p_frame_cnt);
+            // Always set B frames to 0.
+            setInteger("vendor.qti-ext-enc-intra-period.n-bframes", 0);
+            setInteger(MediaFormat.KEY_MAX_B_FRAMES, 0)
         }
 
         videoEncoder = createVideoEncoder()
@@ -161,6 +170,7 @@ class MediaCodecRecorder(private val context: Context,
     }
 
     private suspend fun videoEncoderHandler(endOfStream: Boolean) {
+        audioVideoSemaphore.acquireUninterruptibly()
         videoEncoderRunning = true
         val encoderOutputBuffers: Array<ByteBuffer> = videoEncoder.getOutputBuffers()
         while (videoEncoderRunning) {
@@ -206,12 +216,11 @@ class MediaCodecRecorder(private val context: Context,
             }
         }
         releaseVideoEncoder()
-        synchronized(videoStopSyncObject) {
-            videoStopSyncObject.notifyAll()
-        }
+        audioVideoSemaphore.release()
     }
 
     private suspend fun audioEncoderHandler(endOfStream: Boolean) {
+        audioVideoSemaphore.acquireUninterruptibly()
         audioEncoderRunning = true
         val encoderOutputBuffers: Array<ByteBuffer> = audioEncoder.getOutputBuffers()
         var oldTimeStampUs = 0L
@@ -259,9 +268,7 @@ class MediaCodecRecorder(private val context: Context,
             }
         }
         releaseAudioEncoder()
-        synchronized(audioStopSyncObject) {
-            audioStopSyncObject.notifyAll()
-        }
+        audioVideoSemaphore.release()
     }
 
     private suspend fun audioRecorderHandler(endOfStream: Boolean) {
@@ -324,8 +331,9 @@ class MediaCodecRecorder(private val context: Context,
         muxerTrackCount = 0
     }
 
-    override fun start() {
+    override fun start(orientation: Int?) {
         muxer = createMuxer()
+        orientation?.let { muxer.setOrientationHint(it) }
         videoEncoder = createVideoEncoder()
         audioEncoder = createAudoioEncoder()
         videoEncoder.start()
@@ -346,13 +354,8 @@ class MediaCodecRecorder(private val context: Context,
         videoEncoderRunning = false
         audioRecorderRunning = false
 
-        synchronized(videoStopSyncObject) {
-            videoStopSyncObject.wait()
-        }
-
-        synchronized(audioStopSyncObject) {
-            audioStopSyncObject.wait()
-        }
+        audioVideoSemaphore.acquireUninterruptibly(2)
+        audioVideoSemaphore.release(2)
 
         releaseMuxer()
     }
@@ -369,10 +372,6 @@ class MediaCodecRecorder(private val context: Context,
         return currentVideoFilePath
     }
 
-    override fun getCurrentVideoFileUri(): Uri? {
-        return currentVideoFileUri
-    }
-
     private fun createVideoFile(): FileDescriptor {
         val dateTaken = System.currentTimeMillis()
         val filename = "VID_${SimpleDateFormat("yyyy_MM_dd_HH_mm_ss_SSS", Locale.US).format(Date())}.mp4"
@@ -386,7 +385,6 @@ class MediaCodecRecorder(private val context: Context,
         values.put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
         values.put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_DCIM + "/Camera")
         val uri = context.contentResolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values)
-        currentVideoFileUri = uri
         currentVideoFilePath = "/storage/emulated/0/DCIM/Camera/$filename"
         val file = uri?.let { context.contentResolver.openFileDescriptor(it, "w") }
 

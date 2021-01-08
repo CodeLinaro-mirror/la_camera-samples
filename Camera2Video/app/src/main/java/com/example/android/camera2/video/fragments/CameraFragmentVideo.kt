@@ -1,5 +1,5 @@
 /*
-# Copyright (c) 2020 Qualcomm Innovation Center, Inc.
+# Copyright (c) 2020-2021 Qualcomm Innovation Center, Inc.
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted (subject to the limitations in the
@@ -37,9 +37,10 @@ package com.example.android.camera2.video.fragments
 import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
+import android.graphics.Color
+import android.graphics.ColorFilter
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
-import android.hardware.camera2.CameraMetadata
 import android.media.MediaActionSound
 import android.media.MediaScannerConnection
 import android.media.ThumbnailUtils
@@ -47,14 +48,15 @@ import android.os.Bundle
 import android.os.SystemClock
 import android.provider.MediaStore
 import android.util.Log
-import android.util.Size
 import android.view.*
 import android.webkit.MimeTypeMap
 import androidx.core.graphics.drawable.RoundedBitmapDrawable
 import androidx.core.graphics.drawable.RoundedBitmapDrawableFactory
 import androidx.fragment.app.Fragment
+import androidx.lifecycle.Observer
 import androidx.lifecycle.lifecycleScope
 import com.example.android.camera.utils.AutoFitSurfaceView
+import com.example.android.camera.utils.OrientationLiveData
 import com.example.android.camera.utils.getPreviewOutputSize
 import com.example.android.camera2.video.*
 import com.example.android.camera2.video.CameraSettingsUtil.getCameraSettings
@@ -62,7 +64,6 @@ import com.example.android.camera2.video.MediaCodecRecorder.Companion.MIN_REQUIR
 import kotlinx.android.synthetic.main.fragment_camera_video.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import java.io.File
 
 
 class CameraFragmentVideo : Fragment() {
@@ -81,6 +82,8 @@ class CameraFragmentVideo : Fragment() {
 
     private lateinit var settings: CameraSettings
 
+    private lateinit var relativeOrientation: OrientationLiveData
+
     override fun onCreateView(
             inflater: LayoutInflater,
             container: ViewGroup?,
@@ -92,6 +95,10 @@ class CameraFragmentVideo : Fragment() {
         super.onViewCreated(view, savedInstanceState)
         cameraBase = CameraBase(requireContext().applicationContext)
         settings = getCameraSettings(requireContext().applicationContext)
+
+        // Make Video Record button invisible if there is no encoder stream
+        if (settings.recorderInfo.isEmpty()) recorder_button.visibility = View.INVISIBLE
+
         characteristics = cameraManager.getCameraCharacteristics(settings.cameraId)
 
         overlay = view.findViewById(R.id.overlay)
@@ -176,6 +183,13 @@ class CameraFragmentVideo : Fragment() {
         view.setOnClickListener() {
             cameraMenu.show()
         }
+
+        // Used to rotate the output media to match device orientation
+        relativeOrientation = OrientationLiveData(requireContext(), characteristics).apply {
+            observe(viewLifecycleOwner, Observer {
+                orientation -> Log.d(TAG, "Orientation changed: $orientation")
+            })
+        }
     }
 
     private fun startChronometer() {
@@ -206,38 +220,42 @@ class CameraFragmentVideo : Fragment() {
         cameraBase.setSHDREnable(settings.cameraParams.shdr_enable)
 
         cameraBase.setFramerate(settings.previewInfo.fps)
-        cameraBase.addPreviewStream(viewFinder.holder.surface)
 
-        for (stream in settings.recorderInfo) {
-            cameraBase.addRecorderStream(stream)
-        }
-        cameraBase.startCamera()
+        if (settings.displayOn) cameraBase.addPreviewStream(viewFinder.holder.surface)
 
-        val sound = MediaActionSound()
-        recorder_button.setOnClickListener {
-            if (recording) {
-                if(SystemClock.elapsedRealtime() - chronometer.base>MIN_REQUIRED_RECORDING_TIME_MILLIS) {
-                    cameraBase.stopRecording()
-                    broadcastFile()
-                    sound.play(MediaActionSound.STOP_VIDEO_RECORDING)
-                    recorder_button.setBackgroundResource(android.R.drawable.presence_video_online)
-                    thumbnailButton.setImageDrawable(createRoundThumb())
-                    recording = false
-                    stopChronometer()
-                    Log.d(TAG, "Recorder stop")
-                } else {
-                    Log.d(TAG, "Cannot record a video less than $MIN_REQUIRED_RECORDING_TIME_MILLIS ms")
-                }
-            } else {
-                sound.play(MediaActionSound.START_VIDEO_RECORDING)
-                cameraBase.startRecording()
-                recorder_button.setBackgroundResource(android.R.drawable.presence_video_busy)
-                startChronometer()
-                recording = true
-                Log.d(TAG, "Recorder start")
+        if (settings.recorderInfo.isNotEmpty()) {
+            for (stream in settings.recorderInfo) {
+                cameraBase.addRecorderStream(stream)
             }
         }
 
+        cameraBase.startCamera()
+        if (settings.recorderInfo.isNotEmpty()) {
+            val sound = MediaActionSound()
+            recorder_button.setOnClickListener {
+                if (recording) {
+                    if (SystemClock.elapsedRealtime() - chronometer.base > MIN_REQUIRED_RECORDING_TIME_MILLIS) {
+                        cameraBase.stopRecording()
+                        broadcastFile()
+                        sound.play(MediaActionSound.STOP_VIDEO_RECORDING)
+                        recorder_button.setBackgroundResource(android.R.drawable.presence_video_online)
+                        thumbnailButton.setImageDrawable(createRoundThumb())
+                        recording = false
+                        stopChronometer()
+                        Log.d(TAG, "Recorder stop")
+                    } else {
+                        Log.d(TAG, "Cannot record a video less than $MIN_REQUIRED_RECORDING_TIME_MILLIS ms")
+                    }
+                } else {
+                    sound.play(MediaActionSound.START_VIDEO_RECORDING)
+                    cameraBase.startRecording(relativeOrientation.value)
+                    recorder_button.setBackgroundResource(android.R.drawable.presence_video_busy)
+                    startChronometer()
+                    recording = true
+                    Log.d(TAG, "Recorder start")
+                }
+            }
+        }
         thumbnailButton.setOnClickListener {
             Log.d(TAG, "Thumbnail icon pressed")
             val intent = Intent()

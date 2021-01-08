@@ -1,5 +1,5 @@
 /*
-# Copyright (c) 2020 Qualcomm Innovation Center, Inc.
+# Copyright (c) 2020-2021 Qualcomm Innovation Center, Inc.
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted (subject to the limitations in the
@@ -38,15 +38,17 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
 import android.hardware.camera2.*
+import android.media.ExifInterface
 import android.media.MediaActionSound
 import android.os.Bundle
 import android.os.SystemClock
 import android.util.Log
 import android.view.*
-import android.webkit.MimeTypeMap
 import androidx.fragment.app.Fragment
+import androidx.lifecycle.Observer
 import androidx.lifecycle.lifecycleScope
 import com.example.android.camera.utils.AutoFitSurfaceView
+import com.example.android.camera.utils.OrientationLiveData
 import com.example.android.camera.utils.getDisplaySmartSize
 import com.example.android.camera.utils.getPreviewOutputSize
 import com.example.android.camera2.video.*
@@ -77,6 +79,8 @@ class CameraFragmentDual : Fragment() {
 
     private lateinit var overlay: View
     private lateinit var settings: CameraSettings
+    private lateinit var relativeOrientation0: OrientationLiveData
+    private lateinit var relativeOrientation1: OrientationLiveData
 
     private val camera0Id = "0"
     private val camera1Id = "1"
@@ -93,6 +97,9 @@ class CameraFragmentDual : Fragment() {
         cameraBase0 = CameraBase(requireContext().applicationContext)
         cameraBase1 = CameraBase(requireContext().applicationContext)
         settings = CameraSettingsUtil.getCameraSettings(requireContext().applicationContext)
+        // If there is not recording stream, disable recording button.
+        if (settings.recorderInfo.isEmpty()) recorder_button.visibility = View.INVISIBLE
+
         characteristics0 = cameraManager.getCameraCharacteristics(camera0Id)
         characteristics1 = cameraManager.getCameraCharacteristics(camera1Id)
 
@@ -210,6 +217,19 @@ class CameraFragmentDual : Fragment() {
         view.setOnClickListener() {
             cameraMenu.show()
         }
+
+        // Used to rotate the output media to match device orientation
+        relativeOrientation0 = OrientationLiveData(requireContext(), characteristics0).apply {
+            observe(viewLifecycleOwner, Observer {
+                orientation -> Log.d(CameraFragmentVideo.TAG, "Orientation changed: $orientation")
+            })
+        }
+        // Used to rotate the output media to match device orientation
+        relativeOrientation1 = OrientationLiveData(requireContext(), characteristics1).apply {
+            observe(viewLifecycleOwner, Observer {
+                orientation -> Log.d(CameraFragmentVideo.TAG, "Orientation changed: $orientation")
+            })
+        }
     }
 
 
@@ -234,12 +254,24 @@ class CameraFragmentDual : Fragment() {
         cameraBase0.setSHDREnable(settings.cameraParams.shdr_enable)
 
         cameraBase0.setFramerate(settings.previewInfo.fps)
-        cameraBase0.addPreviewStream(viewFinder.holder.surface)
+
+        if (settings.displayOn) cameraBase0.addPreviewStream(viewFinder.holder.surface)
+
         cameraBase0.addSnapshotStream(settings.snapshotInfo)
 
-        // With Dual cam add only one encoding stream if enabled
-        if (settings.recorderInfo.isNotEmpty()) {
-            cameraBase0.addRecorderStream(settings.recorderInfo[0])
+        when (settings.recorderInfo.size) {
+            0 -> Log.d(TAG, "No Encoding stream configured.")
+            1 -> cameraBase0.addRecorderStream(settings.recorderInfo[0])
+            2 -> {
+                cameraBase0.addRecorderStream(settings.recorderInfo[0])
+                if (!settings.displayOn) cameraBase0.addRecorderStream(settings.recorderInfo[1])
+            }
+            3 -> {
+                // Display is off implicit. Add only 2 encode streams.
+                cameraBase0.addRecorderStream(settings.recorderInfo[0])
+                cameraBase0.addRecorderStream(settings.recorderInfo[1])
+            }
+            else -> Log.d(TAG, "Not a valid config for encoder")
         }
 
         cameraBase1.openCamera(camera1Id)
@@ -249,12 +281,24 @@ class CameraFragmentDual : Fragment() {
         cameraBase1.setSHDREnable(settings.cameraParams.shdr_enable)
 
         cameraBase1.setFramerate(settings.previewInfo.fps)
-        cameraBase1.addPreviewStream(viewFinder1.holder.surface)
+
+        if (settings.displayOn) cameraBase1.addPreviewStream(viewFinder1.holder.surface)
+
         cameraBase1.addSnapshotStream(settings.snapshotInfo)
 
-        // With Dual cam add only one encoding stream if enabled
-        if (settings.recorderInfo.isNotEmpty()) {
-            cameraBase1.addRecorderStream(settings.recorderInfo[0])
+        when (settings.recorderInfo.size) {
+            0 -> Log.d(TAG, "No Encoding stream configured.")
+            1 -> cameraBase1.addRecorderStream(settings.recorderInfo[0])
+            2 -> {
+                cameraBase1.addRecorderStream(settings.recorderInfo[0])
+                if (!settings.displayOn) cameraBase1.addRecorderStream(settings.recorderInfo[1])
+            }
+            3 -> {
+                // Display is off implicit. Add only 2 encode streams.
+                cameraBase1.addRecorderStream(settings.recorderInfo[0])
+                cameraBase1.addRecorderStream(settings.recorderInfo[1])
+            }
+            else -> Log.d(TAG, "Not a valid config for encoder")
         }
 
         cameraBase0.startCamera()
@@ -262,37 +306,46 @@ class CameraFragmentDual : Fragment() {
 
         val sound = MediaActionSound()
 
-        recorder_button.setBackgroundResource(android.R.drawable.presence_video_online)
-        recorder_button.setOnClickListener {
-            if (recording) {
-                if(SystemClock.elapsedRealtime() - chronometer_dual.base>MIN_REQUIRED_RECORDING_TIME_MILLIS) {
-                    cameraBase1.stopRecording()
-                    cameraBase0.stopRecording()
-                    sound.play(MediaActionSound.STOP_VIDEO_RECORDING)
-                    recorder_button.setBackgroundResource(android.R.drawable.presence_video_online)
-                    recording = false
-                    stopChronometer()
+        if (settings.recorderInfo.isNotEmpty()) {
+            recorder_button.setBackgroundResource(android.R.drawable.presence_video_online)
+            recorder_button.setOnClickListener {
+                if (recording) {
+                    if (SystemClock.elapsedRealtime() - chronometer_dual.base > MIN_REQUIRED_RECORDING_TIME_MILLIS) {
+                        cameraBase1.stopRecording()
+                        cameraBase0.stopRecording()
+                        sound.play(MediaActionSound.STOP_VIDEO_RECORDING)
+                        recorder_button.setBackgroundResource(android.R.drawable.presence_video_online)
+                        recording = false
+                        stopChronometer()
+                    } else {
+                        Log.d(CameraFragmentVideo.TAG, "Cannot record a video less than $MIN_REQUIRED_RECORDING_TIME_MILLIS ms")
+                    }
                 } else {
-                    Log.d(CameraFragmentVideo.TAG, "Cannot record a video less than $MIN_REQUIRED_RECORDING_TIME_MILLIS ms")
+                    sound.play(MediaActionSound.START_VIDEO_RECORDING)
+                    cameraBase0.startRecording(relativeOrientation0.value)
+                    cameraBase1.startRecording(relativeOrientation1.value)
+                    recorder_button.setBackgroundResource(android.R.drawable.presence_video_busy)
+                    startChronometer()
+                    recording = true
                 }
-            } else {
-                sound.play(MediaActionSound.START_VIDEO_RECORDING)
-                cameraBase0.startRecording()
-                cameraBase1.startRecording()
-                recorder_button.setBackgroundResource(android.R.drawable.presence_video_busy)
-                startChronometer()
-                recording = true
             }
         }
-
         capture_button.setOnClickListener {
             it.isEnabled = false
             var snapshot0Flag = false
             var snapshot1Flag = false
             lifecycleScope.launch(Dispatchers.IO) {
-                cameraBase0.takeSnapshot().use { result ->
+                cameraBase0.takeSnapshot(relativeOrientation0.value).use { result ->
                     Log.d(TAG, "Result received: $result")
-                    cameraBase0.saveResult(result)
+                    val outputFilePath = cameraBase0.saveResult(result)
+
+                    // If the result is a JPEG file, update EXIF metadata with orientation info
+                    if (outputFilePath?.substring(outputFilePath!!.lastIndexOf(".")) == ".jpg") {
+                        val exif = ExifInterface(outputFilePath)
+                        exif.setAttribute(ExifInterface.TAG_ORIENTATION, result.orientation.toString())
+                        exif.saveAttributes()
+                        Log.d(TAG, "EXIF metadata saved: $outputFilePath")
+                    }
                 }
                 snapshot0Flag = true
                 if (snapshot0Flag and snapshot1Flag) {
@@ -300,9 +353,17 @@ class CameraFragmentDual : Fragment() {
                 }
             }
             lifecycleScope.launch(Dispatchers.IO) {
-                cameraBase1.takeSnapshot().use { result ->
+                cameraBase1.takeSnapshot(relativeOrientation1.value).use { result ->
                     Log.d(TAG, "Result received: $result")
-                    cameraBase1.saveResult(result)
+                    val outputFilePath = cameraBase1.saveResult(result)
+
+                    // If the result is a JPEG file, update EXIF metadata with orientation info
+                    if (outputFilePath?.substring(outputFilePath!!.lastIndexOf(".")) == ".jpg") {
+                        val exif = ExifInterface(outputFilePath)
+                        exif.setAttribute(ExifInterface.TAG_ORIENTATION, result.orientation.toString())
+                        exif.saveAttributes()
+                        Log.d(TAG, "EXIF metadata saved: $outputFilePath")
+                    }
                 }
                 snapshot1Flag = true
                 if (snapshot0Flag and snapshot1Flag) {

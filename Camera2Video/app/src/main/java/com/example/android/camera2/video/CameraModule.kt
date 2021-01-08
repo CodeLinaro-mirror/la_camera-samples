@@ -1,5 +1,5 @@
 /*
-# Copyright (c) 2020 Qualcomm Innovation Center, Inc.
+# Copyright (c) 2020-2021 Qualcomm Innovation Center, Inc.
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted (subject to the limitations in the
@@ -65,8 +65,8 @@ data class CameraSettings(var previewInfo: StreamInfo,
                           var recorderInfo: List<StreamInfo>,
                           var snapshotInfo: StreamInfo,
                           var cameraParams: CameraParameters,
-                          var cameraId: String
-)
+                          var cameraId: String,
+                          var displayOn: Boolean)
 
 interface CameraModule {
     fun getAvailableCameras(): Array<String>
@@ -77,10 +77,10 @@ interface CameraModule {
     fun addRecorderStream(stream: StreamInfo)
     fun addSnapshotStream(stream: StreamInfo)
     fun startCamera()
-    fun startRecording()
+    fun startRecording(value: Int?)
     fun isRecording() : Boolean
     fun stopRecording()
-    suspend fun takeSnapshot(): CombinedCaptureResult
+    suspend fun takeSnapshot(value: Int?): CombinedCaptureResult
     fun close()
     fun setEISEnable(value: Boolean)
     fun setLDCEnable(value: Boolean)

@@ -1,5 +1,5 @@
 /*
-# Copyright (c) 2020 Qualcomm Innovation Center, Inc.
+# Copyright (c) 2020-2021 Qualcomm Innovation Center, Inc.
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted (subject to the limitations in the
@@ -38,10 +38,9 @@ import android.net.Uri
 import android.view.Surface
 
 interface VideoRecorder {
-    fun start()
+    fun start(orientation: Int?)
     fun stop()
     fun destroy()
     fun getRecorderSurface(): Surface
     fun getCurrentVideoFilePath(): String?
-    fun getCurrentVideoFileUri(): Uri?
 }
