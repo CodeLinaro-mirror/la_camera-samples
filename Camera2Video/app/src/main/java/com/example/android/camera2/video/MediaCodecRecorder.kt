@@ -45,7 +45,9 @@ import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import java.io.File
 import java.io.FileDescriptor
+import java.io.FileOutputStream
 import java.nio.ByteBuffer
 import java.text.SimpleDateFormat
 import java.util.*
@@ -57,7 +59,7 @@ class MediaCodecRecorder(private val context: Context,
 
     private var surface: Surface = MediaCodec.createPersistentInputSurface()
     private var videoEncoder: MediaCodec
-    private lateinit var muxer: MediaMuxer
+    private var muxer: MediaMuxer? = null
     private var videoEncoderRunning = false
     private var audioEncoderRunning = false
     private var audioRecorderRunning = false
@@ -70,6 +72,7 @@ class MediaCodecRecorder(private val context: Context,
     private var audioFormat: MediaFormat
     lateinit var audioEncoder: MediaCodec
     private var muxerTrackCount = 0
+    private var storeVideo: Boolean = true
     val muxerLock = Mutex()
 
     private val audioVideoSemaphore = Semaphore(2)
@@ -86,6 +89,7 @@ class MediaCodecRecorder(private val context: Context,
     private val audioMimeType = AUDIO_MIME_TYPE
 
     init {
+        storeVideo = streamInfo.storageEnable
         videoFormat = MediaFormat.createVideoFormat(videoMimeType, streamInfo.width, streamInfo.height).apply {
             setInteger(MediaFormat.KEY_COLOR_FORMAT,
                     MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
@@ -118,11 +122,11 @@ class MediaCodecRecorder(private val context: Context,
 
             setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, streamInfo.interval_iframe)
             // Calculate P frames based on FPS and I frame Interval
-            var p_frame_cnt = 0
+            var pFrameCount = 0
             if (streamInfo.interval_iframe > 0) {
-                p_frame_cnt = (streamInfo.fps * streamInfo.interval_iframe) -1
+                pFrameCount = (streamInfo.fps * streamInfo.interval_iframe) -1
             }
-            setInteger("vendor.qti-ext-enc-intra-period.n-pframes", p_frame_cnt);
+            setInteger("vendor.qti-ext-enc-intra-period.n-pframes", pFrameCount);
             // Always set B frames to 0.
             setInteger("vendor.qti-ext-enc-intra-period.n-bframes", 0);
             setInteger(MediaFormat.KEY_MAX_B_FRAMES, 0)
@@ -163,7 +167,7 @@ class MediaCodecRecorder(private val context: Context,
         }
     }
 
-    private fun createAudoioEncoder(): MediaCodec {
+    private fun createAudioIOEncoder(): MediaCodec {
         return MediaCodec.createEncoderByType(audioMimeType).apply {
             configure(audioFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
         }
@@ -182,9 +186,9 @@ class MediaCodecRecorder(private val context: Context,
                 muxerLock.withLock {
                     if (muxerCreated) {
                         muxerTrackCount++
-                        videoTrackIndex = muxer.addTrack(videoEncoder.outputFormat)
+                        videoTrackIndex = muxer?.addTrack(videoEncoder.outputFormat) ?: -1
                         if (muxerTrackCount == 2 && !muxerStarted) {
-                            muxer.start()
+                            muxer?.start()
                             muxerStarted = true
                         }
                     }
@@ -205,7 +209,7 @@ class MediaCodecRecorder(private val context: Context,
                     encodedData.position(bufferInfo.offset)
                     encodedData.limit(bufferInfo.offset + bufferInfo.size)
                     muxerLock.withLock {
-                        muxer.writeSampleData(videoTrackIndex, encodedData, bufferInfo)
+                        muxer?.writeSampleData(videoTrackIndex, encodedData, bufferInfo)
                     }
                 }
                 videoEncoder.releaseOutputBuffer(encoderStatus, false);
@@ -233,9 +237,9 @@ class MediaCodecRecorder(private val context: Context,
                 muxerLock.withLock {
                     if (muxerCreated) {
                         muxerTrackCount++
-                        audioTrackIndex = muxer.addTrack(audioEncoder.outputFormat)
+                        audioTrackIndex = muxer?.addTrack(audioEncoder.outputFormat) ?: -1
                         if (muxerTrackCount == 2 && !muxerStarted) {
-                            muxer.start()
+                            muxer?.start()
                             muxerStarted = true
                         }
                     }
@@ -256,7 +260,7 @@ class MediaCodecRecorder(private val context: Context,
                     encodedData.position(bufferInfo.offset)
                     encodedData.limit(bufferInfo.offset + bufferInfo.size)
                     muxerLock.withLock {
-                        muxer.writeSampleData(audioTrackIndex, encodedData, bufferInfo)
+                        muxer?.writeSampleData(audioTrackIndex, encodedData, bufferInfo)
                     }
                     oldTimeStampUs = bufferInfo.presentationTimeUs
                 }
@@ -302,9 +306,14 @@ class MediaCodecRecorder(private val context: Context,
         audioEncoderRunning = false
     }
 
-    private fun createMuxer(): MediaMuxer {
-        muxerCreated = true
-        return  MediaMuxer(createVideoFile(), MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+    private fun createMuxer(): MediaMuxer? {
+        return when (storeVideo) {
+            true -> {
+                muxerCreated = true
+                MediaMuxer(createVideoFile(), MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+            }
+            false -> null
+        }
     }
 
     private fun releaseVideoEncoder() {
@@ -321,10 +330,10 @@ class MediaCodecRecorder(private val context: Context,
 
     private fun releaseMuxer() {
         if(muxerStarted) {
-            muxer.stop()
+            muxer?.stop()
         }
         if (muxerCreated) {
-            muxer.release()
+            muxer?.release()
         }
         muxerCreated = false
         muxerStarted = false
@@ -333,9 +342,9 @@ class MediaCodecRecorder(private val context: Context,
 
     override fun start(orientation: Int?) {
         muxer = createMuxer()
-        orientation?.let { muxer.setOrientationHint(it) }
+        orientation?.let { muxer?.setOrientationHint(it) }
         videoEncoder = createVideoEncoder()
-        audioEncoder = createAudoioEncoder()
+        audioEncoder = createAudioIOEncoder()
         videoEncoder.start()
         GlobalScope.launch {
             videoEncoderHandler(false)

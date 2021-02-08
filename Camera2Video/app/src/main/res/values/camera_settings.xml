@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-~ Copyright (c) 2020 Qualcomm Innovation Center, Inc.
+~ Copyright (c) 2020-2021 Qualcomm Innovation Center, Inc.
 ~
 ~ Redistribution and use in source and binary forms, with or without
 ~ modification, are permitted (subject to the limitations in the
@@ -57,7 +57,12 @@
     </string-array>
 
     <string-array name="video_framerates">
+        <item>1</item>
+        <item>8</item>
+        <item>10</item>
+        <item>12</item>
         <item>15</item>
+        <item>20</item>
         <item>24</item>
         <item>30</item>
         <item>60</item>
@@ -78,12 +83,6 @@
         <item>2</item>
         <item>3</item>
         <item>4</item>
-        <item>5</item>
-        <item>6</item>
-        <item>7</item>
-        <item>8</item>
-        <item>9</item>
-        <item>10</item>
     </string-array>
 
     <string-array name="video_rc_mode">
@@ -107,6 +106,8 @@
     </string-array>
 
     <string-array name="camera_fps_range">
+        <item>12</item>
+        <item>15</item>
         <item>30</item>
         <item>60</item>
     </string-array>
@@ -130,5 +131,15 @@
         <item>DEFAULT</item>
         <item>HE_AAC</item>
         <item>OPUS</item>
+    </string-array>
+
+    <string-array name="video_recorder_type">
+        <item>0</item>
+        <item>1</item>
+    </string-array>
+
+    <string-array name="video_recorder_type_string">
+        <item>MediaCodec</item>
+        <item>MediaRecorder</item>
     </string-array>
 </resources>

@@ -45,6 +45,7 @@ import android.media.MediaRecorder
 import android.os.Bundle
 import android.util.Log
 import android.util.Size
+import android.view.View
 import androidx.preference.*
 import com.example.android.camera2.video.CameraSettingsUtil.getCameraSettings
 import com.example.android.camera2.video.R
@@ -84,6 +85,14 @@ class CameraFragmentSettings : PreferenceFragmentCompat(), SharedPreferences.OnS
 
         updateCameraPreferences()
         updateEncodePreference()
+    }
+
+    override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
+        super.onViewCreated(view, savedInstanceState)
+        val navHeight = resources.getDimensionPixelSize(resources.getIdentifier("navigation_bar_height", "dimen", "android"))
+        if (navHeight > 0) {
+            listView.setPadding(0, 0, 0, navHeight)
+        }
     }
 
     override fun onResume() {
@@ -132,6 +141,30 @@ class CameraFragmentSettings : PreferenceFragmentCompat(), SharedPreferences.OnS
                         if (displayPreference != null) {
                             displayPreference.isChecked = true
                         }
+                    }
+                }
+            }
+            "dual_camera" -> {
+                val screen: PreferenceScreen = this.preferenceScreen
+                val dualCam = screen.findPreference<SwitchPreference>("dual_camera")
+                val threeCam = screen.findPreference<SwitchPreference>("three_camera")
+
+                if (threeCam != null && dualCam != null) {
+                    threeCam.isChecked = when (dualCam.isChecked) {
+                        true -> false
+                        false -> true
+                    }
+                }
+            }
+            "three_camera" -> {
+                val screen: PreferenceScreen = this.preferenceScreen
+                val dualCam = screen.findPreference<SwitchPreference>("dual_camera")
+                val threeCam = screen.findPreference<SwitchPreference>("three_camera")
+
+                if (threeCam != null && dualCam != null) {
+                    dualCam.isChecked = when (threeCam.isChecked) {
+                        true -> false
+                        false -> true
                     }
                 }
             }

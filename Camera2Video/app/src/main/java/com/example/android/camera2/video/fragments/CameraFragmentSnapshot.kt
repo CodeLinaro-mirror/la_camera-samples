@@ -37,6 +37,7 @@ package com.example.android.camera2.video.fragments
 import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
+import android.graphics.Color
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
 import android.media.ExifInterface
@@ -46,6 +47,7 @@ import android.media.ThumbnailUtils
 import android.os.Bundle
 import android.provider.MediaStore
 import android.util.Log
+import android.util.Size
 import android.view.LayoutInflater
 import android.view.SurfaceHolder
 import android.view.View
@@ -60,6 +62,7 @@ import com.example.android.camera.utils.AutoFitSurfaceView
 import com.example.android.camera.utils.OrientationLiveData
 import com.example.android.camera.utils.getPreviewOutputSize
 import com.example.android.camera2.video.*
+import com.example.android.camera2.video.overlay.VideoOverlay
 import kotlinx.android.synthetic.main.fragment_camera_snapshot.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -79,6 +82,10 @@ class CameraFragmentSnapshot : Fragment() {
     private lateinit var overlay: View
 
     private lateinit var settings: CameraSettings
+
+    private lateinit var previewSize: Size
+
+    private val videoOverlayList = mutableListOf<VideoOverlay>()
 
     /** Live data listener for changes in the device orientation relative to the camera */
     private lateinit var relativeOrientation: OrientationLiveData
@@ -108,7 +115,7 @@ class CameraFragmentSnapshot : Fragment() {
                     height: Int) = Unit
 
             override fun surfaceCreated(holder: SurfaceHolder) {
-                val previewSize = getPreviewOutputSize(
+                previewSize = getPreviewOutputSize(
                         viewFinder.display, characteristics, SurfaceHolder::class.java)
                 Log.d(TAG, "View finder size: ${viewFinder.width} x ${viewFinder.height}")
                 Log.d(TAG, "Selected preview size: $previewSize")
@@ -176,6 +183,11 @@ class CameraFragmentSnapshot : Fragment() {
                 cameraBase.setISOMode(value)
                 Log.d(TAG, "ISO mode: $value")
             }
+
+            override fun onSetZoom(value: Int) {
+                cameraBase.setZoom(value)
+                Log.d(TAG, "Zoom Value: $value")
+            }
         })
         view.setOnClickListener() {
             cameraMenu.show()
@@ -184,6 +196,12 @@ class CameraFragmentSnapshot : Fragment() {
         relativeOrientation = OrientationLiveData(requireContext(), characteristics).apply {
             observe(viewLifecycleOwner, Observer {
                 orientation -> Log.d(TAG, "Orientation changed: $orientation")
+                val sensorOrientationDegrees =
+                        characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION)!!
+                val sign = if (characteristics.get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_FRONT) 1 else -1
+                val requiredOrientation = ((orientation - sensorOrientationDegrees)*sign).toFloat()
+                capture_button.rotation = requiredOrientation
+                thumbnailButton2.rotation = requiredOrientation
             })
         }
     }
@@ -197,7 +215,16 @@ class CameraFragmentSnapshot : Fragment() {
         cameraBase.setSHDREnable(settings.cameraParams.shdr_enable)
 
         cameraBase.setFramerate(settings.previewInfo.fps)
-        cameraBase.addPreviewStream(viewFinder.holder.surface)
+
+        if (settings.previewInfo.overlayEnable) {
+            val previewOverlay = VideoOverlay(viewFinder.holder.surface, previewSize.width, previewSize.height, 0.0f)
+            previewOverlay.setTextOverlay("Preview overlay", 0.0f, 100.0f, 100.0f, Color.WHITE, 0.5f)
+            videoOverlayList.add(previewOverlay)
+            cameraBase.addPreviewStream(previewOverlay.getInputSurface())
+        } else {
+            cameraBase.addPreviewStream(viewFinder.holder.surface)
+        }
+
         cameraBase.addSnapshotStream(settings.snapshotInfo)
         cameraBase.startCamera()
 
@@ -218,8 +245,10 @@ class CameraFragmentSnapshot : Fragment() {
                     }
                 }
                 it.post {
-                    broadcastFile()
-                    thumbnailButton2.setImageDrawable(createRoundThumb())
+                    if (settings.snapshotInfo.encoding == "JPEG") {
+                        broadcastFile()
+                        thumbnailButton2.setImageDrawable(createRoundThumb())
+                    }
                     it.isEnabled = true
                 }
             }
@@ -254,12 +283,15 @@ class CameraFragmentSnapshot : Fragment() {
     }
 
     override fun onStop() {
-        super.onStop()
         try {
             cameraBase.close()
         } catch (exc: Throwable) {
             Log.e(TAG, "Error closing camera", exc)
         }
+        for (overlay in videoOverlayList) {
+            overlay.release()
+        }
+        super.onStop()
     }
 
     override fun onDestroy() {

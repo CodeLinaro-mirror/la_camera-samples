@@ -55,6 +55,9 @@ data class StreamInfo(
         val initqp_b_frame: Int = 0,
         val initqp_p_frame: Int = 0,
         val interval_iframe: Int = 0,
+        val storageEnable: Boolean = true,
+        val videoRecorderType: Int = 0,
+        val overlayEnable: Boolean = false
 )
 
 data class CameraParameters(val eis_enable: Boolean = false,
@@ -66,7 +69,8 @@ data class CameraSettings(var previewInfo: StreamInfo,
                           var snapshotInfo: StreamInfo,
                           var cameraParams: CameraParameters,
                           var cameraId: String,
-                          var displayOn: Boolean)
+                          var displayOn: Boolean,
+                          var threeCamUse: Boolean)
 
 interface CameraModule {
     fun getAvailableCameras(): Array<String>
@@ -76,6 +80,7 @@ interface CameraModule {
     fun addStream(surface: Surface)
     fun addRecorderStream(stream: StreamInfo)
     fun addSnapshotStream(stream: StreamInfo)
+    fun addVideoRecorder(recorder: VideoRecorder)
     fun startCamera()
     fun startRecording(value: Int?)
     fun isRecording() : Boolean
@@ -98,4 +103,5 @@ interface CameraModule {
     fun setADRCMode(value: Byte)
     fun setExpMeteringMode(value: Int)
     fun setISOMode(value: Long)
+    fun setZoom(value: Int)
 }

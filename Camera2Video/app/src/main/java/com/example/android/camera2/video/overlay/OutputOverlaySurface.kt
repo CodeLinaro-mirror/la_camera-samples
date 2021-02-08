@@ -1,5 +1,5 @@
 /*
-# Copyright (c) 2020-2021 Qualcomm Innovation Center, Inc.
+# Copyright (c) 2021 Qualcomm Innovation Center, Inc.
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted (subject to the limitations in the
@@ -32,31 +32,39 @@
 # IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
-package com.example.android.camera2.video
+package com.example.android.camera2.video.overlay
 
-import android.content.Context
-import android.net.Uri
+import android.opengl.EGLSurface
 import android.view.Surface
 
-val VIDEO_RECORDER_MEDIA_CODEC = 0
-val VIDEO_RECORDER_MEDIA_RECORDER = 1
 
-interface VideoRecorder {
-    fun start(orientation: Int?)
-    fun stop()
-    fun destroy()
-    fun getRecorderSurface(): Surface
-    fun getCurrentVideoFilePath(): String?
-}
+class OutputOverlaySurface {
+    private val outSurface : Surface
+    private var eglCore: EglCore
+    private val eglSurface: EGLSurface
 
-fun VideoRecorderFactory(context: Context,
-                         streamInfo: StreamInfo,
-                         videoRecorder: Int) : VideoRecorder {
+    constructor (core: EglCore, surface: Surface) {
+        outSurface = surface
+        eglCore = core
+        eglSurface = eglCore.createWindowSurface(outSurface)
+    }
 
-    return when (videoRecorder) {
-        VIDEO_RECORDER_MEDIA_CODEC -> MediaCodecRecorder(context, streamInfo)
-        VIDEO_RECORDER_MEDIA_RECORDER -> MediaRecorderRecorder(context, streamInfo)
-        else -> throw Exception("Unsupported video recorder type")
+    fun release() {
+    }
 
+    fun makeCurrent() {
+        eglCore.makeCurrent(eglSurface)
+    }
+
+    fun swapBuffers(): Boolean {
+        return eglCore.swapBuffers(eglSurface)
+    }
+
+    fun getSurface(): Surface {
+        return outSurface
+    }
+
+    fun setPresentationTime(timestamp: Long) {
+        eglCore.setPresentationTime(eglSurface, timestamp)
     }
 }

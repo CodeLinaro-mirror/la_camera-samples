@@ -37,12 +37,14 @@ package com.example.android.camera2.video.fragments
 import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
+import android.graphics.Color
 import android.hardware.camera2.*
 import android.media.ExifInterface
 import android.media.MediaActionSound
 import android.os.Bundle
 import android.os.SystemClock
 import android.util.Log
+import android.util.Size
 import android.view.*
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.Observer
@@ -53,16 +55,12 @@ import com.example.android.camera.utils.getDisplaySmartSize
 import com.example.android.camera.utils.getPreviewOutputSize
 import com.example.android.camera2.video.*
 import com.example.android.camera2.video.MediaCodecRecorder.Companion.MIN_REQUIRED_RECORDING_TIME_MILLIS
-import kotlinx.android.synthetic.main.fragment_camera_dual.capture_button
-import kotlinx.android.synthetic.main.fragment_camera_dual.*
-import kotlinx.android.synthetic.main.fragment_camera_dual.capture_button
-import kotlinx.android.synthetic.main.fragment_camera_dual.recorder_button
-import kotlinx.android.synthetic.main.fragment_camera_snapshot.*
-import kotlinx.android.synthetic.main.fragment_camera_video.*
+import com.example.android.camera2.video.overlay.VideoOverlay
+import kotlinx.android.synthetic.main.fragment_camera_multicam.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 
-class CameraFragmentDual : Fragment() {
+class CameraFragmentMultiCam : Fragment() {
     private val cameraManager: CameraManager by lazy {
         val context = requireContext().applicationContext
         context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
@@ -70,11 +68,13 @@ class CameraFragmentDual : Fragment() {
 
     private lateinit var cameraBase0: CameraBase
     private lateinit var cameraBase1: CameraBase
+    private lateinit var cameraBase2: CameraBase
 
     private lateinit var characteristics0: CameraCharacteristics
     private lateinit var characteristics1: CameraCharacteristics
+    private lateinit var characteristics2: CameraCharacteristics
 
-    private lateinit var viewFinder: AutoFitSurfaceView
+    private lateinit var viewFinder0: AutoFitSurfaceView
     private lateinit var viewFinder1: AutoFitSurfaceView
 
     private lateinit var overlay: View
@@ -82,14 +82,20 @@ class CameraFragmentDual : Fragment() {
     private lateinit var relativeOrientation0: OrientationLiveData
     private lateinit var relativeOrientation1: OrientationLiveData
 
+    private lateinit var previewSize0: Size
+    private lateinit var previewSize1: Size
+
+    private val videoOverlayList = mutableListOf<VideoOverlay>()
+
     private val camera0Id = "0"
     private val camera1Id = "1"
+    private val camera2Id = "2"
 
     override fun onCreateView(
             inflater: LayoutInflater,
             container: ViewGroup?,
             savedInstanceState: Bundle?
-    ): View? = inflater.inflate(R.layout.fragment_camera_dual, container, false)
+    ): View? = inflater.inflate(R.layout.fragment_camera_multicam, container, false)
 
     @SuppressLint("MissingPermission")
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
@@ -97,17 +103,23 @@ class CameraFragmentDual : Fragment() {
         cameraBase0 = CameraBase(requireContext().applicationContext)
         cameraBase1 = CameraBase(requireContext().applicationContext)
         settings = CameraSettingsUtil.getCameraSettings(requireContext().applicationContext)
+
         // If there is not recording stream, disable recording button.
         if (settings.recorderInfo.isEmpty()) recorder_button.visibility = View.INVISIBLE
 
         characteristics0 = cameraManager.getCameraCharacteristics(camera0Id)
         characteristics1 = cameraManager.getCameraCharacteristics(camera1Id)
 
+        if (settings.threeCamUse) {
+            cameraBase2 = CameraBase(requireContext().applicationContext)
+            characteristics2 = cameraManager.getCameraCharacteristics(camera2Id)
+        }
+
         overlay = view.findViewById(R.id.overlay)
-        viewFinder = view.findViewById(R.id.view_finder)
+        viewFinder0 = view.findViewById(R.id.view_finder)
         viewFinder1 = view.findViewById(R.id.view_finder1)
 
-        viewFinder.holder.addCallback(object : SurfaceHolder.Callback {
+        viewFinder0.holder.addCallback(object : SurfaceHolder.Callback {
             override fun surfaceDestroyed(holder: SurfaceHolder) = Unit
             override fun surfaceChanged(
                     holder: SurfaceHolder,
@@ -116,12 +128,11 @@ class CameraFragmentDual : Fragment() {
                     height: Int) = Unit
 
             override fun surfaceCreated(holder: SurfaceHolder) {
-                val screenSize = getDisplaySmartSize(viewFinder.display)
-                val previewSize = getPreviewOutputSize(
-                        viewFinder.display, characteristics0, SurfaceHolder::class.java)
-                Log.d(TAG, "View finder size: ${viewFinder.width} x ${viewFinder.height}")
-                Log.d(TAG, "Selected preview size: $previewSize")
-                viewFinder.setAspectRatio(previewSize.width, previewSize.height)
+                previewSize0 = getPreviewOutputSize(
+                        viewFinder0.display, characteristics0, SurfaceHolder::class.java)
+                Log.d(TAG, "View finder size: ${viewFinder0.width} x ${viewFinder0.height}")
+                Log.d(TAG, "Selected preview size: $previewSize0")
+                viewFinder0.setAspectRatio(previewSize0.width, previewSize0.height)
             }
         })
 
@@ -134,11 +145,11 @@ class CameraFragmentDual : Fragment() {
                     height: Int) = Unit
 
             override fun surfaceCreated(holder: SurfaceHolder) {
-                val previewSize = getPreviewOutputSize(
+                previewSize1 = getPreviewOutputSize(
                        viewFinder1.display, characteristics1, SurfaceHolder::class.java)
                 Log.d(TAG, "View finder size: ${viewFinder1.width} x ${viewFinder1.height}")
-                Log.d(TAG, "Selected preview size: $previewSize")
-                viewFinder1.setAspectRatio(previewSize.width, previewSize.height)
+                Log.d(TAG, "Selected preview size: $previewSize1")
+                viewFinder1.setAspectRatio(previewSize1.width, previewSize1.height)
                 viewFinder1.post { initializeCamera() }
             }
         })
@@ -213,6 +224,12 @@ class CameraFragmentDual : Fragment() {
                 cameraBase1.setISOMode(value)
                 Log.d(TAG, "ISO mode: $value")
             }
+
+            override fun onSetZoom(value: Int) {
+                cameraBase0.setZoom(value)
+                cameraBase1.setZoom(value)
+                Log.d(TAG, "Zoom value: $value")
+            }
         })
         view.setOnClickListener() {
             cameraMenu.show()
@@ -222,6 +239,14 @@ class CameraFragmentDual : Fragment() {
         relativeOrientation0 = OrientationLiveData(requireContext(), characteristics0).apply {
             observe(viewLifecycleOwner, Observer {
                 orientation -> Log.d(CameraFragmentVideo.TAG, "Orientation changed: $orientation")
+                val sensorOrientationDegrees0 =
+                        characteristics0.get(CameraCharacteristics.SENSOR_ORIENTATION)!!
+                val sign = if (characteristics0.get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_FRONT) 1 else -1
+                val requiredOrientation = ((orientation - sensorOrientationDegrees0)*sign).toFloat()
+                capture_button.rotation = requiredOrientation
+                recorder_button.rotation = requiredOrientation
+                chronometer_dual.rotation = requiredOrientation
+                thumbnailButton3.rotation = requiredOrientation
             })
         }
         // Used to rotate the output media to match device orientation
@@ -255,7 +280,16 @@ class CameraFragmentDual : Fragment() {
 
         cameraBase0.setFramerate(settings.previewInfo.fps)
 
-        if (settings.displayOn) cameraBase0.addPreviewStream(viewFinder.holder.surface)
+        if (settings.displayOn) {
+            if (settings.previewInfo.overlayEnable) {
+                val previewOverlay = VideoOverlay(viewFinder0.holder.surface, previewSize0.width, previewSize0.height, 0.0f)
+                previewOverlay.setTextOverlay("Preview overlay", 0.0f, 100.0f, 100.0f, Color.WHITE, 0.5f)
+                videoOverlayList.add(previewOverlay)
+                cameraBase0.addPreviewStream(previewOverlay.getInputSurface())
+            } else {
+                cameraBase0.addPreviewStream(viewFinder0.holder.surface)
+            }
+        }
 
         cameraBase0.addSnapshotStream(settings.snapshotInfo)
 
@@ -282,7 +316,16 @@ class CameraFragmentDual : Fragment() {
 
         cameraBase1.setFramerate(settings.previewInfo.fps)
 
-        if (settings.displayOn) cameraBase1.addPreviewStream(viewFinder1.holder.surface)
+        if (settings.displayOn) {
+            if (settings.previewInfo.overlayEnable) {
+                val previewOverlay = VideoOverlay(viewFinder1.holder.surface, previewSize1.width, previewSize1.height, 0.0f)
+                previewOverlay.setTextOverlay("Preview overlay", 0.0f, 100.0f, 100.0f, Color.WHITE, 0.5f)
+                videoOverlayList.add(previewOverlay)
+                cameraBase1.addPreviewStream(previewOverlay.getInputSurface())
+            } else {
+                cameraBase1.addPreviewStream(viewFinder1.holder.surface)
+            }
+        }
 
         cameraBase1.addSnapshotStream(settings.snapshotInfo)
 
@@ -301,8 +344,16 @@ class CameraFragmentDual : Fragment() {
             else -> Log.d(TAG, "Not a valid config for encoder")
         }
 
+        if (settings.threeCamUse) {
+            cameraBase2.openCamera(camera2Id)
+            val rawSnap = StreamInfo(0,0,0, "RAW")
+            cameraBase2.addSnapshotStream(rawSnap)
+        }
+
         cameraBase0.startCamera()
         cameraBase1.startCamera()
+
+        if (settings.threeCamUse) cameraBase2.startCamera()
 
         val sound = MediaActionSound()
 
@@ -334,6 +385,10 @@ class CameraFragmentDual : Fragment() {
             it.isEnabled = false
             var snapshot0Flag = false
             var snapshot1Flag = false
+            var snapshot2Flag = false
+
+            if (!settings.threeCamUse) snapshot2Flag = true
+
             lifecycleScope.launch(Dispatchers.IO) {
                 cameraBase0.takeSnapshot(relativeOrientation0.value).use { result ->
                     Log.d(TAG, "Result received: $result")
@@ -348,7 +403,7 @@ class CameraFragmentDual : Fragment() {
                     }
                 }
                 snapshot0Flag = true
-                if (snapshot0Flag and snapshot1Flag) {
+                if (snapshot0Flag and snapshot1Flag and snapshot2Flag) {
                     it.post { it.isEnabled = true }
                 }
             }
@@ -366,8 +421,20 @@ class CameraFragmentDual : Fragment() {
                     }
                 }
                 snapshot1Flag = true
-                if (snapshot0Flag and snapshot1Flag) {
+                if (snapshot0Flag and snapshot1Flag and snapshot2Flag) {
                     it.post { it.isEnabled = true }
+                }
+            }
+            if (settings.threeCamUse) {
+                lifecycleScope.launch(Dispatchers.IO) {
+                    cameraBase2.takeSnapshot(0).use { result ->
+                        Log.d(TAG, "Result received: $result")
+                        val outputFilePath = cameraBase2.saveResult(result)
+                    }
+                    snapshot2Flag = true
+                    if (snapshot0Flag and snapshot1Flag and snapshot2Flag) {
+                        it.post { it.isEnabled = true }
+                    }
                 }
             }
             sound.play(MediaActionSound.SHUTTER_CLICK)
@@ -391,17 +458,21 @@ class CameraFragmentDual : Fragment() {
             recording = false
             stopChronometer()
         }
-        super.onStop()
         try {
             cameraBase0.close()
             cameraBase1.close()
+            if (settings.threeCamUse) cameraBase2.close()
         } catch (exc: Throwable) {
             Log.e(TAG, "Error closing camera", exc)
         }
+        for (overlay in videoOverlayList) {
+            overlay.release()
+        }
+        super.onStop()
     }
 
     companion object {
-        private val TAG = CameraFragmentDual::class.java.simpleName
+        private val TAG = CameraFragmentMultiCam::class.java.simpleName
         var recording = false
     }
 }

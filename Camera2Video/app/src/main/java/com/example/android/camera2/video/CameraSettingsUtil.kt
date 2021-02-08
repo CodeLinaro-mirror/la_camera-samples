@@ -49,6 +49,7 @@ object CameraSettingsUtil {
         val previewInfo = StreamInfo(
                 0,0,
                 sharedPref.getString("camera_fps", null)!!.toInt(),
+                overlayEnable = sharedPref.getBoolean("preview_overlay",false)
         )
 
         val streamInfo0 = StreamInfo(
@@ -69,6 +70,9 @@ object CameraSettingsUtil {
                 sharedPref.getString("vid_0_b_init_qp", null)!!.toInt(),
                 sharedPref.getString("vid_0_p_init_qp", null)!!.toInt(),
                 sharedPref.getString("vid_0_iframe_interval", null)!!.toInt(),
+                sharedPref.getBoolean("video_storage", true),
+                videoRecorderType = sharedPref.getString("video_recorder_type", null)!!.toInt(),
+                overlayEnable = sharedPref.getBoolean("vid_0_overlay",false)
         )
 
         val streamInfo1 = StreamInfo(
@@ -89,8 +93,10 @@ object CameraSettingsUtil {
                 sharedPref.getString("vid_1_b_init_qp", null)!!.toInt(),
                 sharedPref.getString("vid_1_p_init_qp", null)!!.toInt(),
                 sharedPref.getString("vid_1_iframe_interval", null)!!.toInt(),
-
-                )
+                sharedPref.getBoolean("video_storage", true),
+                videoRecorderType = sharedPref.getString("video_recorder_type", null)!!.toInt(),
+                overlayEnable = sharedPref.getBoolean("vid_1_overlay",false)
+        )
 
         val streamInfo2 = StreamInfo(
                 ParseWidth(sharedPref.getString("vid_2_size", null)),
@@ -110,6 +116,9 @@ object CameraSettingsUtil {
                 sharedPref.getString("vid_2_b_init_qp", null)!!.toInt(),
                 sharedPref.getString("vid_2_p_init_qp", null)!!.toInt(),
                 sharedPref.getString("vid_2_iframe_interval", null)!!.toInt(),
+                sharedPref.getBoolean("video_storage", true),
+                videoRecorderType = sharedPref.getString("video_recorder_type", null)!!.toInt(),
+                overlayEnable = sharedPref.getBoolean("vid_2_overlay",false)
         )
 
         val snapshotInfo = StreamInfo(
@@ -142,7 +151,8 @@ object CameraSettingsUtil {
                         sharedPref.getBoolean("shdr_enable",false)
                 ),
                 sharedPref.getString("camera_id", null)!!,
-                sharedPref.getBoolean("display_enable",false)
+                sharedPref.getBoolean("display_enable",false),
+                sharedPref.getBoolean("three_camera",false)
         )
     }
 }
