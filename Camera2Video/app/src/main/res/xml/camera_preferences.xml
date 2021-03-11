@@ -69,12 +69,22 @@
     <PreferenceCategory android:title="Display" >
         <androidx.preference.SwitchPreference
             android:key="display_enable"
-            android:title="Display For Recording"
+            android:title="Display"
             android:summary="Enable Display"
             android:defaultValue="true"/>
+        <androidx.preference.SwitchPreference
+            android:key="preview_overlay"
+            android:title="Preview overlay"
+            android:summary="Preview overlay"
+            android:defaultValue="false"/>
     </PreferenceCategory>
 
     <PreferenceCategory android:title="Snapshot" >
+        <androidx.preference.SwitchPreference
+            android:key="snapshot_enable"
+            android:title="Snapshot Enable"
+            android:summary="Enable Snapshot Stream"
+            android:defaultValue="true"/>
         <androidx.preference.ListPreference
             android:key="snapshot_size"
             android:title="Snapshot Size"
@@ -89,14 +99,31 @@
             android:entries="@array/snapshot_formats"
             android:entryValues="@array/snapshot_formats"
             android:defaultValue="JPEG" />
+        <androidx.preference.SwitchPreference
+            android:key="zsl_enable"
+            android:title="HAL-ZSL"
+            android:summary="HAL-ZSL"
+            android:defaultValue="true"/>
     </PreferenceCategory>
 
     <PreferenceCategory android:title="Video" >
+        <androidx.preference.ListPreference
+            android:key="video_recorder_type"
+            android:title="Video recorder type"
+            android:summary="%s"
+            android:entries="@array/video_recorder_type_string"
+            android:entryValues="@array/video_recorder_type"
+            android:defaultValue="0"/>
         <androidx.preference.SwitchPreference
             android:key="vid_0_enable"
             android:title="Stream 0 Enable"
             android:summary="Enable Stream 0 Recording"
             android:defaultValue="true"/>
+        <androidx.preference.SwitchPreference
+            android:key="vid_0_overlay"
+            android:title="Stream 0 overlay"
+            android:summary="Stream 0 overlay"
+            android:defaultValue="false"/>
         <androidx.preference.ListPreference
             android:key="vid_0_format"
             android:title="Stream 0 Format"
@@ -113,10 +140,10 @@
             android:defaultValue="30"/>
         <androidx.preference.ListPreference
             android:key="vid_0_bitrate"
-            android:title="Stream 0 Bitrate in Mbps"
+            android:title="Stream 0 Bitrate"
             android:summary="%s"
             android:entries="@array/video_bitrates"
-            android:entryValues="@array/video_bitrates"
+            android:entryValues="@array/video_bitrates_values"
             android:defaultValue="10"/>
         <androidx.preference.ListPreference
             android:key="vid_0_iframe_interval"
@@ -204,7 +231,12 @@
             android:key="vid_1_enable"
             android:title="Stream 1 Enable"
             android:summary="Enable Stream 1 Recording"
-            android:defaultValue="true" />
+            android:defaultValue="false" />
+        <androidx.preference.SwitchPreference
+            android:key="vid_1_overlay"
+            android:title="Stream 1 overlay"
+            android:summary="Stream 1 overlay"
+            android:defaultValue="false"/>
         <androidx.preference.ListPreference
             android:key="vid_1_format"
             android:title="Stream 1 Format"
@@ -221,10 +253,10 @@
             android:defaultValue="30"/>
         <androidx.preference.ListPreference
             android:key="vid_1_bitrate"
-            android:title="Stream 1 Bitrate in Mbps"
+            android:title="Stream 1 Bitrate"
             android:summary="%s"
             android:entries="@array/video_bitrates"
-            android:entryValues="@array/video_bitrates"
+            android:entryValues="@array/video_bitrates_values"
             android:defaultValue="10"/>
         <androidx.preference.ListPreference
             android:key="vid_1_iframe_interval"
@@ -313,6 +345,11 @@
             android:title="Stream 2 Enable"
             android:summary="Enable Stream 2 Recording"
             android:defaultValue="false" />
+        <androidx.preference.SwitchPreference
+            android:key="vid_2_overlay"
+            android:title="Stream 2 overlay"
+            android:summary="Stream 2 overlay"
+            android:defaultValue="false"/>
         <androidx.preference.ListPreference
             android:key="vid_2_format"
             android:title="Stream 2 Format"
@@ -329,10 +366,10 @@
             android:defaultValue="30"/>
         <androidx.preference.ListPreference
             android:key="vid_2_bitrate"
-            android:title="Stream 2 Bitrate in Mbps"
+            android:title="Stream 2 Bitrate"
             android:summary="%s"
             android:entries="@array/video_bitrates"
-            android:entryValues="@array/video_bitrates"
+            android:entryValues="@array/video_bitrates_values"
             android:defaultValue="10"/>
         <androidx.preference.ListPreference
             android:key="vid_2_iframe_interval"
@@ -435,6 +472,26 @@
             android:key="three_camera"
             android:title="Three Camera"
             android:defaultValue="false"/>
+    </PreferenceCategory>
+
+    <PreferenceCategory android:title="Camera Feature" >
+        <Preference
+            android:title="Defog Table"
+            android:key="defog_file" />
+        <Preference
+            android:title="Exposure Table"
+            android:key="exposure_file" />
+        <Preference
+            android:title="ANR Data"
+            android:key="anr_file" />
+        <Preference
+            android:title="Local Tone Mapping"
+            android:key="ltm_file" />
+        <androidx.preference.ListPreference
+            android:key="exposure_value"
+            android:title="Exposure"
+            android:summary="%s"
+            android:defaultValue="0"/>
     </PreferenceCategory>
 
     <PreferenceCategory android:title="Version" >

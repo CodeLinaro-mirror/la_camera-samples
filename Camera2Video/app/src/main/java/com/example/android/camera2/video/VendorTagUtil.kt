@@ -1,5 +1,5 @@
 /*
-# Copyright (c) 2020 Qualcomm Innovation Center, Inc.
+# Copyright (c) 2020-2021 Qualcomm Innovation Center, Inc.
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted (subject to the limitations in the
@@ -38,6 +38,92 @@ import android.hardware.camera2.CameraAccessException
 import android.hardware.camera2.CameraDevice
 import android.hardware.camera2.CaptureRequest
 import android.util.Log
+import com.google.gson.Gson
+import kotlin.reflect.KProperty1
+import kotlin.reflect.full.memberProperties
+
+
+data class DefogParams(
+        val enable: Byte,
+        val algo_type: Int,
+        val algo_decision_mode: Int,
+        val strength: Float,
+        val convergence_speed: Int,
+        val strength_range: List<Float>,
+        val convergence_speed_range: List<Int>,
+        val lp_color_comp_gain: Float,
+        val lp_color_comp_gain_range: List<Float>,
+        val abc_en: Byte,
+        val acc_en: Byte,
+        val afsd_en: Byte,
+        val afsd_2a_en: Byte,
+        val defog_dark_thres: Int,
+        val defog_dark_thres_range: List<Int>,
+        val defog_bright_thres: Int,
+        val defog_bright_thres_range: List<Int>,
+        val abc_gain: Float,
+        val abc_gain_range: List<Float>,
+        val acc_max_dark_str: Float,
+        val acc_max_dark_str_range: List<Float>,
+        val acc_max_bright_str: Float,
+        val acc_max_bright_str_range: List<Float>,
+        val dark_limit: Int,
+        val dark_limit_range: List<Int>,
+        val bright_limit: Int,
+        val bright_limit_range: List<Int>,
+        val dark_preserve: Int,
+        val dark_preserve_range: List<Int>,
+        val bright_preserve: Int,
+        val bright_preserve_range: List<Int>,
+        val dnr_trigparam_start_range: List<Float>,
+        val dnr_trigparam_end_range: List<Float>,
+        val dnr_trigparam_fog_range: List<Int>,
+        val lux_trigparam_start_range: List<Float>,
+        val lux_trigparam_end_range: List<Float>,
+        val lux_trigparam_fog_range: List<Int>,
+        val cct_trigparam_start_range: List<Float>,
+        val cct_trigparam_end_range: List<Float>,
+        val cct_trigparam_fog_range: List<Int>,
+        val ce_trigparam_start_range: List<Float>,
+        val ce_trigparam_end_range: List<Float>,
+        val ce_trigparam_fog_range: List<Int>,
+        val drc_trigparam_start_range: List<Float>,
+        val drc_trigparam_end_range: List<Float>,
+        val drc_trigparam_fog_range: List<Int>,
+        val hdr_trigparam_start_range: List<Float>,
+        val hdr_trigparam_end_range: List<Float>,
+        val hdr_trigparam_fog_range: List<Int>,
+        val ce_en: Byte,
+        val convergence_mode: Int,
+        val guc_en: Byte,
+        val dcc_en: Byte,
+        val guc_str: Float,
+        val dcc_dark_str: Float,
+        val dcc_bright_str: Float
+)
+
+data class ExposureTable(
+        val isValid: Byte,
+        val sensitivityCorrectionFactor: Float,
+        val kneeCount: Int,
+        val gainKneeEntries: List<Float>,
+        val expTimeKneeEntries: List<Long>,
+        val incrementPriorityKneeEntries: List<Int>,
+        val expIndexKneeEntries: List<Float>,
+        val thresAntiBandingMinExpTimePct: Float
+)
+
+data class ANRTable(
+        val anr_intensity: Float,
+        val anr_motion_sensitivity: Float,
+        val anr_tuning_range: List<Float>
+)
+
+data class LTMTable(
+        val ltmDynamicContrastStrength: Float,
+        val ltmDarkBoostStrength: Float,
+        val ltmBrightSupressStrength: Float
+)
 
 object VendorTagUtil {
     private const val TAG = "VendorTagUtil"
@@ -75,6 +161,9 @@ object VendorTagUtil {
     private val MANUAL_WB_GAINS = CaptureRequest.Key("org.codeaurora.qcamera3.manualWB.gains", FloatArray::class.java)
     private val PARTIAL_MANUAL_WB_MODE = CaptureRequest.Key("org.codeaurora.qcamera3.manualWB.partial_mwb_mode", Int::class.java)
     private val HDRVideoMode = CaptureRequest.Key("org.quic.camera2.streamconfigs.HDRVideoMode", Byte::class.java)
+    private val SATURATION_LEVEL_KEY = CaptureRequest.Key("org.codeaurora.qcamera3.saturation.use_saturation", Int::class.java)
+    private val SHARPNESS_LEVEL_KEY = CaptureRequest.Key("org.codeaurora.qcamera3.sharpness.strength", Int::class.java)
+
     private const val MANUAL_WB_DISABLE_MODE = 0
     private const val MANUAL_WB_CCT_MODE = 1
     private const val MANUAL_WB_GAINS_MODE = 2
@@ -164,6 +253,26 @@ object VendorTagUtil {
     fun setIRLED(builder: CaptureRequest.Builder, value: Int) {
         if (isIRLEDSupported(builder)) {
             builder.set(IRLEDKey, value)
+        }
+    }
+
+    private fun isSaturationLevelSupported(builder: CaptureRequest.Builder): Boolean {
+        return isSupported(builder, SATURATION_LEVEL_KEY)
+    }
+
+    fun setSaturationLevel(builder: CaptureRequest.Builder, value: Int) {
+        if (isSaturationLevelSupported(builder)) {
+            builder.set(SATURATION_LEVEL_KEY, value)
+        }
+    }
+
+    private fun isSharpnessLevelSupported(builder: CaptureRequest.Builder): Boolean {
+        return isSupported(builder, SHARPNESS_LEVEL_KEY)
+    }
+
+    fun setSharpnessLevel(builder: CaptureRequest.Builder, value: Int) {
+        if (isSharpnessLevelSupported(builder)) {
+            builder.set(SHARPNESS_LEVEL_KEY, value)
         }
     }
 
@@ -295,4 +404,88 @@ object VendorTagUtil {
         }
     }
 
+    fun setDefog(builder: CaptureRequest.Builder, defogData: String) {
+        GenericSetVendorEntries(builder, defogData, "Defog", "org.quic.camera.defog.", DefogParams::class.java, DefogParams::class.memberProperties).setVendorEntries()
+    }
+
+    fun setExposureTable(builder: CaptureRequest.Builder, exposureData: String) {
+        GenericSetVendorEntries(builder, exposureData, "Exposure Table", "org.codeaurora.qcamera3.exposuretable.", ExposureTable::class.java, ExposureTable::class.memberProperties).setVendorEntries()
+    }
+
+    fun setANRTable(builder: CaptureRequest.Builder, ANRData: String) {
+        GenericSetVendorEntries(builder, ANRData, "ANR Table", "org.quic.camera.anr_tuning.", ANRTable::class.java, ANRTable::class.memberProperties).setVendorEntries()
+    }
+
+    fun setLTMTable(builder: CaptureRequest.Builder, LTMData: String) {
+        GenericSetVendorEntries(builder, LTMData, "LTM Table", "org.quic.camera.ltmDynamicContrast.", LTMTable::class.java, LTMTable::class.memberProperties).setVendorEntries()
+    }
+
+    class GenericSetVendorEntries<T> (private val builder: CaptureRequest.Builder, private val jsonString: String, private val type: String, private val keyText: String, private val f1: Class<T>, private val f2: Collection<KProperty1<T, *>>){
+        fun setVendorEntries() {
+            Log.d(TAG, "Setting $type Table")
+            if(jsonString=="{\"enable\" : 0}") {
+                val key = CaptureRequest.Key(keyText + "enable", Byte::class.java)
+                if (isSupported(builder, key)) builder.set(key, 0)
+            } else if(jsonString=="{\"isValid\" : 0}") {
+                val key = CaptureRequest.Key(keyText + "isValid", Byte::class.java)
+                if (isSupported(builder, key)) builder.set(key, 0)
+            } else {
+                val tableParam = Gson().fromJson(jsonString, f1)
+                for (prop in f2) {
+                    if (prop.call(tableParam) != null) {
+                        if (prop.returnType.toString() == "kotlin.Byte") {
+                            val key = CaptureRequest.Key(keyText + prop.name, Byte::class.java)
+                            if (isSupported(builder, key)) builder.set(key, prop.call(tableParam) as Byte)
+                        } else if (prop.returnType.toString() == "kotlin.Float") {
+                            val key = CaptureRequest.Key(keyText + prop.name, Float::class.java)
+                            if (isSupported(builder, key)) builder.set(key, prop.call(tableParam) as Float)
+                        } else if (prop.returnType.toString() == "kotlin.Boolean") {
+                            val key = CaptureRequest.Key(keyText + prop.name, Byte::class.java)
+                            if (isSupported(builder, key)) builder.set(key, if (prop.call(tableParam) as Boolean) 1 else 0)
+                        } else if (prop.returnType.toString() == "kotlin.Double") {
+                            val key = CaptureRequest.Key(keyText + prop.name, Float::class.java)
+                            if (isSupported(builder, key)) builder.set(key, prop.call(tableParam).toString().toFloat())
+                        } else if (prop.returnType.toString() == "kotlin.Int") {
+                            val key = CaptureRequest.Key(keyText + prop.name, Int::class.java)
+                            if (isSupported(builder, key)) builder.set(key, prop.call(tableParam) as Int)
+                        } else if (prop.returnType.toString() == "kotlin.collections.List<kotlin.Float>") {
+                            val key = CaptureRequest.Key(keyText + prop.name, FloatArray::class.java)
+                            val indexEntries = FloatArray((prop.call(tableParam) as List<*>).size)
+                            var index = 0
+                            for (item in (prop.call(tableParam) as List<*>)) {
+                                indexEntries[index++] = item as Float
+                            }
+                            if (isSupported(builder, key)) builder.set(key, indexEntries)
+                        } else if (prop.returnType.toString() == "kotlin.collections.List<kotlin.Double>") {
+                            val key = CaptureRequest.Key(keyText + prop.name, FloatArray::class.java)
+                            val indexEntries = FloatArray((prop.call(tableParam) as List<*>).size)
+                            var index = 0
+                            for (item in prop.call(tableParam) as List<*>) {
+                                indexEntries[index++] = item.toString().toFloat()
+                            }
+                            if (isSupported(builder, key)) builder.set(key, indexEntries)
+                        } else if (prop.returnType.toString() == "kotlin.collections.List<kotlin.Int>") {
+                            val key = CaptureRequest.Key(keyText + prop.name, IntArray::class.java)
+                            val indexEntries = IntArray((prop.call(tableParam) as List<*>).size)
+                            var index = 0
+                            for (item in (prop.call(tableParam) as List<*>)) {
+                                indexEntries[index++] = item as Int
+                            }
+                            if (isSupported(builder, key)) builder.set(key, indexEntries)
+                        } else if (prop.returnType.toString() == "kotlin.collections.List<kotlin.Long>") {
+                            val key = CaptureRequest.Key(keyText + prop.name, LongArray::class.java)
+                            val indexEntries = LongArray((prop.call(tableParam) as List<*>).size)
+                            var index = 0
+                            for (item in prop.call(tableParam) as List<*>) {
+                                indexEntries[index++] = item as Long
+                            }
+                            if (isSupported(builder, key)) builder.set(key, indexEntries)
+                        } else {
+                            Log.e(TAG, "New Type found - need to handle ${prop.returnType}")
+                        }
+                    }
+                }
+            }
+        }
+    }
 }

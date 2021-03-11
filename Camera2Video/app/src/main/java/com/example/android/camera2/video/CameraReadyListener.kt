@@ -1,5 +1,5 @@
 /*
-# Copyright (c) 2020-2021 Qualcomm Innovation Center, Inc.
+# Copyright (c) 2021 Qualcomm Innovation Center, Inc.
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted (subject to the limitations in the
@@ -13,7 +13,7 @@
 #      disclaimer in the documentation and/or other materials provided
 #      with the distribution.
 #
-#    * Neither the name Qualcomm Innovation Center nor the names of its
+#    * Neither the name of Qualcomm Innovation Center nor the names of its
 #      contributors may be used to endorse or promote products derived
 #      from this software without specific prior written permission.
 #
@@ -34,29 +34,6 @@
 
 package com.example.android.camera2.video
 
-import android.content.Context
-import android.net.Uri
-import android.view.Surface
-
-val VIDEO_RECORDER_MEDIA_CODEC = 0
-val VIDEO_RECORDER_MEDIA_RECORDER = 1
-
-interface VideoRecorder {
-    fun start(orientation: Int?)
-    fun stop()
-    fun destroy()
-    fun getRecorderSurface(): Surface
-    fun getCurrentVideoFilePath(): String?
-}
-
-fun VideoRecorderFactory(context: Context,
-                         streamInfo: StreamInfo,
-                         videoRecorder: Int) : VideoRecorder {
-
-    return when (videoRecorder) {
-        VIDEO_RECORDER_MEDIA_CODEC -> MediaCodecRecorder(context, streamInfo)
-        VIDEO_RECORDER_MEDIA_RECORDER -> MediaRecorderRecorder(context, streamInfo)
-        else -> throw Exception("Unsupported video recorder type")
-
-    }
+interface CameraReadyListener {
+    fun onIsCameraReadyUpdated(oldIsCameraReady: Boolean, newIsCameraReady: Boolean)
 }

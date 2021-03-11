@@ -42,6 +42,7 @@ import android.provider.MediaStore
 import android.util.Log
 import android.view.Surface
 import kotlinx.coroutines.GlobalScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -52,6 +53,7 @@ import java.nio.ByteBuffer
 import java.text.SimpleDateFormat
 import java.util.*
 import java.util.concurrent.Semaphore
+import kotlin.concurrent.thread
 
 
 class MediaCodecRecorder(private val context: Context,
@@ -59,7 +61,7 @@ class MediaCodecRecorder(private val context: Context,
 
     private var surface: Surface = MediaCodec.createPersistentInputSurface()
     private var videoEncoder: MediaCodec
-    private lateinit var muxer: MediaMuxer
+    private var muxer: MediaMuxer? = null
     private var videoEncoderRunning = false
     private var audioEncoderRunning = false
     private var audioRecorderRunning = false
@@ -73,10 +75,13 @@ class MediaCodecRecorder(private val context: Context,
     lateinit var audioEncoder: MediaCodec
     private var muxerTrackCount = 0
     private var storeVideo: Boolean = true
-    val muxerLock = Mutex()
+    val muxerLock = Object()
+    private lateinit var videoEncoderThread: Thread
+    private lateinit var audioEncoderThread: Thread
+    private lateinit var audioRecorderThread: Thread
 
-    private val audioVideoSemaphore = Semaphore(2)
     private var currentVideoFilePath: String? = null
+    private var isFirstTime = true
 
     private var videoMimeType: String = when (streamInfo.encoding) {
         "H264" -> "video/avc"
@@ -93,7 +98,11 @@ class MediaCodecRecorder(private val context: Context,
         videoFormat = MediaFormat.createVideoFormat(videoMimeType, streamInfo.width, streamInfo.height).apply {
             setInteger(MediaFormat.KEY_COLOR_FORMAT,
                     MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
-            setInteger(MediaFormat.KEY_BIT_RATE, streamInfo.bitrate * 1_000_000)
+            when (streamInfo.bitrate) {
+                128, 256, 512 -> setInteger(MediaFormat.KEY_BIT_RATE, streamInfo.bitrate * 1000)
+                1, 2, 4, 6, 10, 20, 30, 40, 50, 100 -> setInteger(MediaFormat.KEY_BIT_RATE, streamInfo.bitrate * 1000000)
+                else -> Log.e(TAG, "Not a valid bitrate value")
+            }
             setInteger(MediaFormat.KEY_FRAME_RATE, streamInfo.fps)
             when(streamInfo.rcmode) {
                 0, 1, 2 ,3, 4 -> setInteger("vendor.qti-ext-enc-bitrate-mode.value", streamInfo.rcmode)
@@ -122,11 +131,11 @@ class MediaCodecRecorder(private val context: Context,
 
             setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, streamInfo.interval_iframe)
             // Calculate P frames based on FPS and I frame Interval
-            var p_frame_cnt = 0
+            var pFrameCount = 0
             if (streamInfo.interval_iframe > 0) {
-                p_frame_cnt = (streamInfo.fps * streamInfo.interval_iframe) -1
+                pFrameCount = (streamInfo.fps * streamInfo.interval_iframe) -1
             }
-            setInteger("vendor.qti-ext-enc-intra-period.n-pframes", p_frame_cnt);
+            setInteger("vendor.qti-ext-enc-intra-period.n-pframes", pFrameCount);
             // Always set B frames to 0.
             setInteger("vendor.qti-ext-enc-intra-period.n-bframes", 0);
             setInteger(MediaFormat.KEY_MAX_B_FRAMES, 0)
@@ -134,9 +143,9 @@ class MediaCodecRecorder(private val context: Context,
 
         videoEncoder = createVideoEncoder()
         videoEncoder.start()
-        GlobalScope.launch {
+        thread {
             videoEncoderHandler(true)
-        }
+        }.join()
 
         val minBufferSize = AudioRecord.getMinBufferSize(AUDIO_SAMPLE_RATE,
                 AudioFormat.CHANNEL_IN_MONO,
@@ -173,22 +182,19 @@ class MediaCodecRecorder(private val context: Context,
         }
     }
 
-    private suspend fun videoEncoderHandler(endOfStream: Boolean) {
-        audioVideoSemaphore.acquireUninterruptibly()
+    private fun videoEncoderHandler(endOfStream: Boolean) {
         videoEncoderRunning = true
         val encoderOutputBuffers: Array<ByteBuffer> = videoEncoder.getOutputBuffers()
         while (videoEncoderRunning) {
             val bufferInfo = MediaCodec.BufferInfo()
             val encoderStatus = videoEncoder.dequeueOutputBuffer(bufferInfo, TIMEOUT_USEC)
-            if (encoderStatus == MediaCodec.INFO_TRY_AGAIN_LATER) {
-                continue
-            } else if (encoderStatus == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
-                muxerLock.withLock {
+            if (encoderStatus == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+                synchronized(muxerLock) {
                     if (muxerCreated) {
                         muxerTrackCount++
-                        videoTrackIndex = muxer.addTrack(videoEncoder.outputFormat)
+                        videoTrackIndex = muxer?.addTrack(videoEncoder.outputFormat) ?: -1
                         if (muxerTrackCount == 2 && !muxerStarted) {
-                            muxer.start()
+                            muxer?.start()
                             muxerStarted = true
                         }
                     }
@@ -197,6 +203,7 @@ class MediaCodecRecorder(private val context: Context,
 
             } else {
                 if (endOfStream) {
+                    videoEncoder.releaseOutputBuffer(encoderStatus, false)
                     break
                 }
 
@@ -206,11 +213,13 @@ class MediaCodecRecorder(private val context: Context,
                 }
 
                 if (bufferInfo.size !== 0 && muxerStarted) {
+                    if(isFirstTime) {
+                        isFirstTime = false
+                        Log.e(TAG, "First Video Frame received.")
+                    }
                     encodedData.position(bufferInfo.offset)
                     encodedData.limit(bufferInfo.offset + bufferInfo.size)
-                    muxerLock.withLock {
-                        muxer.writeSampleData(videoTrackIndex, encodedData, bufferInfo)
-                    }
+                    muxer?.writeSampleData(videoTrackIndex, encodedData, bufferInfo)
                 }
                 videoEncoder.releaseOutputBuffer(encoderStatus, false);
 
@@ -218,28 +227,27 @@ class MediaCodecRecorder(private val context: Context,
                     break
                 }
             }
+            if (endOfStream) {
+                break
+            }
         }
         releaseVideoEncoder()
-        audioVideoSemaphore.release()
     }
 
-    private suspend fun audioEncoderHandler(endOfStream: Boolean) {
-        audioVideoSemaphore.acquireUninterruptibly()
+    private fun audioEncoderHandler(endOfStream: Boolean) {
         audioEncoderRunning = true
         val encoderOutputBuffers: Array<ByteBuffer> = audioEncoder.getOutputBuffers()
         var oldTimeStampUs = 0L
         while (audioEncoderRunning) {
             val bufferInfo = MediaCodec.BufferInfo()
             val encoderStatus = audioEncoder.dequeueOutputBuffer(bufferInfo, TIMEOUT_USEC)
-            if (encoderStatus == MediaCodec.INFO_TRY_AGAIN_LATER) {
-                continue
-            } else if (encoderStatus == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
-                muxerLock.withLock {
+            if (encoderStatus == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+                synchronized(muxerLock) {
                     if (muxerCreated) {
                         muxerTrackCount++
-                        audioTrackIndex = muxer.addTrack(audioEncoder.outputFormat)
+                        audioTrackIndex = muxer?.addTrack(audioEncoder.outputFormat) ?: -1
                         if (muxerTrackCount == 2 && !muxerStarted) {
-                            muxer.start()
+                            muxer?.start()
                             muxerStarted = true
                         }
                     }
@@ -248,6 +256,7 @@ class MediaCodecRecorder(private val context: Context,
 
             } else {
                 if (endOfStream) {
+                    audioEncoder.releaseOutputBuffer(encoderStatus, false)
                     break
                 }
 
@@ -259,12 +268,10 @@ class MediaCodecRecorder(private val context: Context,
                 if (bufferInfo.size !== 0 && muxerStarted && (oldTimeStampUs < bufferInfo.presentationTimeUs)) {
                     encodedData.position(bufferInfo.offset)
                     encodedData.limit(bufferInfo.offset + bufferInfo.size)
-                    muxerLock.withLock {
-                        muxer.writeSampleData(audioTrackIndex, encodedData, bufferInfo)
-                    }
+                    muxer?.writeSampleData(audioTrackIndex, encodedData, bufferInfo)
                     oldTimeStampUs = bufferInfo.presentationTimeUs
                 }
-                audioEncoder.releaseOutputBuffer(encoderStatus, false);
+                audioEncoder.releaseOutputBuffer(encoderStatus, false)
 
                 if (bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM !== 0) {
                     break
@@ -272,10 +279,9 @@ class MediaCodecRecorder(private val context: Context,
             }
         }
         releaseAudioEncoder()
-        audioVideoSemaphore.release()
     }
 
-    private suspend fun audioRecorderHandler(endOfStream: Boolean) {
+    private fun audioRecorderHandler(endOfStream: Boolean) {
         audioRecorderRunning = true
         val encoderInputBuffers: Array<ByteBuffer> = audioEncoder.getInputBuffers()
         while (audioRecorderRunning) {
@@ -289,7 +295,7 @@ class MediaCodecRecorder(private val context: Context,
 
                 val status = audioRecorder.getTimestamp(audioTimestamp, AudioTimestamp.TIMEBASE_MONOTONIC)
                 if (status != AudioRecord.SUCCESS) {
-                    throw Exception("Invalid audio timestamp")
+                    Log.e(TAG, "Invalid audio timestamp!")
                 }
 
                 val presentationTimeUs = audioTimestamp.nanoTime / 1000
@@ -306,10 +312,14 @@ class MediaCodecRecorder(private val context: Context,
         audioEncoderRunning = false
     }
 
-    private fun createMuxer(): MediaMuxer {
-        muxerCreated = true
-        return  if (storeVideo) MediaMuxer(createVideoFile(), MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
-        else  MediaMuxer(FileOutputStream(File("/dev/null")).fd!!, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+    private fun createMuxer(): MediaMuxer? {
+        return when (storeVideo) {
+            true -> {
+                muxerCreated = true
+                MediaMuxer(createVideoFile(), MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+            }
+            false -> null
+        }
     }
 
     private fun releaseVideoEncoder() {
@@ -325,11 +335,12 @@ class MediaCodecRecorder(private val context: Context,
     }
 
     private fun releaseMuxer() {
+        Log.i(TAG, "releaseMuxer")
         if(muxerStarted) {
-            muxer.stop()
+            muxer?.stop()
         }
         if (muxerCreated) {
-            muxer.release()
+            muxer?.release()
         }
         muxerCreated = false
         muxerStarted = false
@@ -337,35 +348,40 @@ class MediaCodecRecorder(private val context: Context,
     }
 
     override fun start(orientation: Int?) {
+        Log.i(TAG, "start enter")
         muxer = createMuxer()
-        orientation?.let { muxer.setOrientationHint(it) }
+        orientation?.let { muxer?.setOrientationHint(it) }
         videoEncoder = createVideoEncoder()
         audioEncoder = createAudioIOEncoder()
         videoEncoder.start()
-        GlobalScope.launch {
+        videoEncoderThread = thread {
             videoEncoderHandler(false)
         }
         audioEncoder.start()
-        GlobalScope.launch {
+        audioEncoderThread = thread {
             audioEncoderHandler(false)
         }
         audioRecorder.startRecording()
-        GlobalScope.launch {
+        audioRecorderThread = thread {
             audioRecorderHandler(false)
         }
+        Log.i(TAG, "start exit")
     }
 
     override fun stop() {
+        Log.i(TAG, "stop enter")
         videoEncoderRunning = false
         audioRecorderRunning = false
 
-        audioVideoSemaphore.acquireUninterruptibly(2)
-        audioVideoSemaphore.release(2)
-
+        videoEncoderThread.join()
+        audioEncoderThread.join()
+        audioRecorderThread.join()
         releaseMuxer()
+        Log.i(TAG, "stop exit")
     }
 
     override fun destroy() {
+        Log.i(TAG, "destroy")
         surface.release()
     }
 
@@ -409,6 +425,6 @@ class MediaCodecRecorder(private val context: Context,
         private const val AUDIO_SAMPLES_PER_FRAME = 1024
         private const val AUDIO_BITRATE = 128000
         private const val AUDIO_MIME_TYPE = "audio/mp4a-latm"
-        private val TAG = VideoRecorder::class.simpleName
+        private val TAG = MediaCodecRecorder::class.simpleName
     }
 }

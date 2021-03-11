@@ -56,27 +56,34 @@ data class StreamInfo(
         val initqp_p_frame: Int = 0,
         val interval_iframe: Int = 0,
         val storageEnable: Boolean = true,
+        val videoRecorderType: Int = 0,
+        val overlayEnable: Boolean = false
 )
 
 data class CameraParameters(val eis_enable: Boolean = false,
                             val ldc_enable: Boolean = false,
-                            val shdr_enable: Boolean = false)
+                            val shdr_enable: Boolean = false,
+                            val exposure_value: Int = 0,
+                            val hal_zsl_enable: Boolean = true)
 
 data class CameraSettings(var previewInfo: StreamInfo,
-                          var recorderInfo: List<StreamInfo>,
+                          var recorderInfo: MutableList<StreamInfo>,
                           var snapshotInfo: StreamInfo,
                           var cameraParams: CameraParameters,
                           var cameraId: String,
                           var displayOn: Boolean,
+                          var snapshotOn: Boolean,
                           var threeCamUse: Boolean)
 
 interface CameraModule {
     fun getAvailableCameras(): Array<String>
+    fun getSensorOrientation(): Int
     suspend fun openCamera(cameraId: String)
     fun setFramerate(fps: Int)
     fun addPreviewStream(surface: Surface)
     fun addStream(surface: Surface)
     fun addRecorderStream(stream: StreamInfo)
+    fun addSharedStream(surfaceList: List<Surface>)
     fun addSnapshotStream(stream: StreamInfo)
     fun addVideoRecorder(recorder: VideoRecorder)
     fun startCamera()
@@ -88,7 +95,6 @@ interface CameraModule {
     fun setEISEnable(value: Boolean)
     fun setLDCEnable(value: Boolean)
     fun setTNREnable(value: Byte)
-    fun setEffectMode(value: Int)
     fun setNRMode(value: Int)
     fun setSHDREnable(value: Boolean)
     fun setAELock(value: Boolean)
@@ -101,4 +107,13 @@ interface CameraModule {
     fun setADRCMode(value: Byte)
     fun setExpMeteringMode(value: Int)
     fun setISOMode(value: Long)
+    fun setZoom(value: Int)
+    fun setDefog(value: Boolean) : Boolean
+    fun setExposureTable(value: Boolean) : Boolean
+    fun setANRTable(value: Boolean) : Boolean
+    fun setLTMTable(value: Boolean) : Boolean
+    fun setSaturationLevel(value: Int)
+    fun setSharpnessLevel(value: Int)
+    fun setExposureValue(value: Int)
+    fun setZSL(value: Boolean)
 }

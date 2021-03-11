@@ -1,7 +1,7 @@
 /*
 # Changes from Qualcomm Innovation Center, Inc. are provided under the following license:
 
-# Copyright (c) 2020 Qualcomm Innovation Center, Inc.
+# Copyright (c) 2020-2021 Qualcomm Innovation Center, Inc.
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted (subject to the limitations in the
@@ -54,13 +54,18 @@ package com.example.android.camera2.video.fragments
 
 import android.Manifest
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Bundle
+import android.provider.Settings
+import android.util.Log
 import android.widget.Toast
+import androidx.core.app.ActivityCompat.finishAffinity
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.Fragment
-import androidx.navigation.Navigation
-import com.example.android.camera2.video.R
+import com.example.android.camera2.video.CameraActivity
+
 
 private const val PERMISSIONS_REQUEST_CODE = 10
 private val PERMISSIONS_REQUIRED = arrayOf(
@@ -75,34 +80,47 @@ private val PERMISSIONS_REQUIRED = arrayOf(
 class PermissionsFragment : Fragment() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        Log.i(TAG, "onCreate")
         super.onCreate(savedInstanceState)
-
-        if (hasPermissions(requireContext())) {
-            // If permissions have already been granted, proceed
-            Navigation.findNavController(requireActivity(), R.id.fragment_container).navigate(
-                    PermissionsFragmentDirections.actionPermissionsFragmentToCameraFragment())
-        } else {
-            // Request camera-related permissions
-            requestPermissions(PERMISSIONS_REQUIRED, PERMISSIONS_REQUEST_CODE)
-        }
+        requestPermissions(PERMISSIONS_REQUIRED, PERMISSIONS_REQUEST_CODE)
     }
 
     override fun onRequestPermissionsResult(
             requestCode: Int, permissions: Array<String>, grantResults: IntArray) {
+        Log.i(TAG, "onRequestPermissionsResult")
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode == PERMISSIONS_REQUEST_CODE) {
-            if (grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+            if (hasPermissions(requireContext())) {
                 // Takes the user to the success fragment when permission is granted
-                Navigation.findNavController(requireActivity(), R.id.fragment_container).navigate(
-                        PermissionsFragmentDirections.actionPermissionsFragmentToCameraFragment())
+                (context as CameraActivity).switchToLaunchFragment()
             } else {
-                Toast.makeText(context, "Permission request denied", Toast.LENGTH_LONG).show()
+                Toast.makeText(context, "Please give permissions", Toast.LENGTH_LONG).show()
+                val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+                val uri: Uri = Uri.fromParts("package", requireContext().packageName, null)
+                intent.data = uri
+                startActivity(intent)
+                finishAffinity(requireActivity());
             }
         }
     }
 
-    companion object {
+    override fun onResume() {
+        Log.i(TAG, "onResume")
+        super.onResume()
+    }
 
+    override fun onPause() {
+        Log.i(TAG, "onPause")
+        super.onPause()
+    }
+
+    override fun onDestroy() {
+        Log.i(TAG, "onDestroy")
+        super.onDestroy()
+    }
+
+    companion object {
+        private val TAG = PermissionsFragment::class.java.simpleName
         /** Convenience method used to check if all permissions required by this app are granted */
         fun hasPermissions(context: Context) = PERMISSIONS_REQUIRED.all {
             ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED

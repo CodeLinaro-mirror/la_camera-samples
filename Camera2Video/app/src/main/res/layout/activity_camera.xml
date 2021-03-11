@@ -78,13 +78,7 @@
                     android:id="@+id/video"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="Video" />
-
-                <com.google.android.material.tabs.TabItem
-                    android:id="@+id/Snapshot"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="Snapshot" />
+                    android:text="Single Cam" />
 
                 <com.google.android.material.tabs.TabItem
                     android:id="@+id/multi_cam"
@@ -108,13 +102,9 @@
             android:layout_height="match_parent"
             android:layout_marginTop="36dp"
             android:keepScreenOn="true"
-            app:defaultNavHost="true"
-            app:navGraph="@navigation/nav_graph"
             app:layout_constraintTop_toBottomOf="@+id/appbar"
             tools:context=".CameraActivity"
-            tools:layout_editor_absoluteX="0dp">
-
-        </androidx.fragment.app.FragmentContainerView>
+            tools:layout_editor_absoluteX="0dp" />
 
     </androidx.constraintlayout.widget.ConstraintLayout>
 </androidx.coordinatorlayout.widget.CoordinatorLayout>

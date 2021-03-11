@@ -49,15 +49,12 @@ import java.text.SimpleDateFormat
 import java.util.*
 
 
-class MediaRecorderRecorder(val context: Context,
-                    val width: Int,
-                    val height: Int,
-                    val fps: Int,
-                    private val video_encoder: String?,
-                    private val audio_encoder: String) : VideoRecorder {
+class MediaRecorderRecorder(private val context: Context,
+                            streamInfo: StreamInfo) : VideoRecorder {
 
     private var outputFile = createFile(context, "mp4")
     private lateinit var recorder: MediaRecorder
+    val streamInfo: StreamInfo = streamInfo
     private val surface: Surface by lazy {
 
         val recorderSurface = MediaCodec.createPersistentInputSurface()
@@ -70,6 +67,7 @@ class MediaRecorderRecorder(val context: Context,
     }
 
     private fun createRecorder(srfs: Surface, fd: FileDescriptor) = MediaRecorder().apply {
+        Log.i(TAG, "createRecorder")
         setAudioSource(MediaRecorder.AudioSource.CAMCORDER)
         setVideoSource(MediaRecorder.VideoSource.SURFACE)
         setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
@@ -79,17 +77,17 @@ class MediaRecorderRecorder(val context: Context,
             setOutputFile(outputFile.absolutePath)
         }
         setVideoEncodingBitRate(RECORDER_VIDEO_BITRATE)
-        if (fps > 0) setVideoFrameRate(fps)
-        setVideoSize(width, height)
-        when (video_encoder) {
+        if (streamInfo.fps > 0) setVideoFrameRate(streamInfo.fps)
+        setVideoSize(streamInfo.width, streamInfo.height)
+        when (streamInfo.encoding) {
             "H264" -> setVideoEncoder(MediaRecorder.VideoEncoder.H264)
             "H265" -> setVideoEncoder(MediaRecorder.VideoEncoder.HEVC)
             else -> {
-                throw Exception("Unsupported video format: $video_encoder")
+                throw Exception("Unsupported video format: ${streamInfo.encoding}")
             }
         }
 
-        var audioFormat = when (audio_encoder) {
+        var audioFormat = when (streamInfo.audioEnc) {
             "AAC" -> {
                 MediaRecorder.AudioEncoder.AAC
             }
@@ -112,7 +110,7 @@ class MediaRecorderRecorder(val context: Context,
                 MediaRecorder.AudioEncoder.OPUS
             }
             else -> {
-                throw Exception("Unsupported audio format: $audio_encoder")
+                throw Exception("Unsupported audio format: ${streamInfo.encoding}")
             }
         }
         setAudioEncoder(audioFormat)
@@ -120,17 +118,22 @@ class MediaRecorderRecorder(val context: Context,
     }
 
     override fun start(orientation: Int?) {
+        Log.i(TAG, "start enter")
         recorder = createVideoFile()?.let { createRecorder(surface, it) }!!
         recorder.prepare()
         recorder.start()
+        Log.i(TAG, "start exit")
     }
 
     override fun stop() {
+        Log.i(TAG, "stop enter")
         recorder.stop()
         recorder.release()
+        Log.i(TAG, "stop exit")
     }
 
     override fun destroy() {
+        Log.i(TAG, "destroy")
         surface.release()
     }
 
@@ -139,7 +142,7 @@ class MediaRecorderRecorder(val context: Context,
     }
 
     override fun getCurrentVideoFilePath(): String? {
-        return null
+        return ""
     }
 
     private fun createFile(context: Context, extension: String): File {
@@ -148,6 +151,7 @@ class MediaRecorderRecorder(val context: Context,
     }
 
     private fun createVideoFile(): FileDescriptor? {
+        Log.i(TAG, "createVideoFile")
         val dateTaken = System.currentTimeMillis()
         val filename = "VID_${SimpleDateFormat("yyyy_MM_dd_HH_mm_ss_SSS", Locale.US).format(Date())}.mp4"
 
@@ -172,6 +176,6 @@ class MediaRecorderRecorder(val context: Context,
     companion object {
         private const val RECORDER_VIDEO_BITRATE: Int = 10_000_000
         private const val MIN_REQUIRED_RECORDING_TIME_MILLIS: Long = 1000L
-        private val TAG = VideoRecorder::class.simpleName
+        private val TAG = MediaRecorderRecorder::class.simpleName
     }
 }
