@@ -55,8 +55,6 @@ import android.util.Range
 import android.view.Surface
 import android.widget.Toast
 import com.example.android.camera.utils.OrientationLiveData.Companion.getOrientationValueForRotation
-import kotlinx.coroutines.GlobalScope
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import java.io.*
 import java.nio.MappedByteBuffer
@@ -66,11 +64,12 @@ import java.text.SimpleDateFormat
 import java.util.*
 import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.Executor
-import java.util.concurrent.TimeoutException
+import java.util.concurrent.Semaphore
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import kotlin.coroutines.suspendCoroutine
 import kotlin.math.roundToInt
+import kotlin.properties.Delegates
 
 class CameraBase(val context: Context): CameraModule {
 
@@ -87,6 +86,8 @@ class CameraBase(val context: Context): CameraModule {
     private lateinit var camera: CameraDevice
 
     lateinit var session: CameraCaptureSession
+
+    lateinit var sessionHFR: CameraConstrainedHighSpeedCaptureSession
 
     lateinit var previewRequest: CaptureRequest.Builder
 
@@ -106,6 +107,8 @@ class CameraBase(val context: Context): CameraModule {
     private var isEISEnabled: Boolean = false
     private var isLDCEnabled: Boolean = false
     private var isSHDREnabled: Boolean = false
+    private var exposureValue = 0
+    private var enableZSL = true
 
     private lateinit var imageReader: ImageReader
 
@@ -117,6 +120,14 @@ class CameraBase(val context: Context): CameraModule {
 
     val closeSync = Object()
 
+    val takeSnapshotSemaphore  = Semaphore(1)
+
+    var listeners = mutableListOf<CameraReadyListener>()
+
+    var isCameraReady: Boolean by Delegates.observable(false) { _, old, new ->
+        listeners.forEach { it.onIsCameraReadyUpdated(old, new) }
+    }
+
     override fun getAvailableCameras(): Array<String> = cameraManager.cameraIdList
 
     override fun getSensorOrientation(): Int {
@@ -124,15 +135,17 @@ class CameraBase(val context: Context): CameraModule {
     }
 
     override suspend fun openCamera(cameraId: String) {
-        Log.d(TAG, "openCamera")
+        Log.i(TAG, "openCamera")
         camera = suspendCancellableCoroutine { cont ->
             val callback = object : CameraDevice.StateCallback() {
                 override fun onOpened(camera: CameraDevice) {
+                    Log.i(TAG, "openCamera onOpened")
                     cont.resume(camera)
                 }
 
                 override fun onDisconnected(camera: CameraDevice) {
-                    cont.resume(camera)
+                    Log.w(TAG, "Camera $cameraId has been disconnected")
+                    CameraActivity().finish()
                 }
 
                 override fun onError(camera: CameraDevice, error: Int) {
@@ -150,6 +163,7 @@ class CameraBase(val context: Context): CameraModule {
                 }
 
                 override fun onClosed(camera: CameraDevice) {
+                    Log.i(TAG, "openCamera onClosed")
                     super.onClosed(camera)
                     clearStreams()
                     synchronized(closeSync) {
@@ -163,10 +177,11 @@ class CameraBase(val context: Context): CameraModule {
         captureRequest = camera.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE)
 
         characteristics = cameraManager.getCameraCharacteristics(cameraId)
-        Log.d(TAG, "openCamera done")
+        Log.i(TAG, "openCamera done")
     }
 
     private fun createSession(targets: List<Surface>) {
+        Log.i(TAG, "createSession enter")
 
         val outConfigurations = mutableListOf<OutputConfiguration>()
         for (surface in targets) {
@@ -196,12 +211,13 @@ class CameraBase(val context: Context): CameraModule {
         captureRequest.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, Range(previewFps, previewFps))
 
         // Set ZSL Mode
-        captureRequest.set(CaptureRequest.CONTROL_ENABLE_ZSL, true)
+        captureRequest.set(CaptureRequest.CONTROL_ENABLE_ZSL, enableZSL)
 
         // Set Opmode
         if (isEISEnabled) streamConfigOpMode = streamConfigOpMode or STREAM_CONFIG_EIS_MODE
         if (isSHDREnabled) streamConfigOpMode = streamConfigOpMode or STREAM_CONFIG_ZZHDR_MODE
         if (isLDCEnabled) streamConfigOpMode = streamConfigOpMode or STREAM_CONFIG_LDC_MODE
+        if (previewFps == 120) streamConfigOpMode = streamConfigOpMode or HIGH_SPEED_SESSION
 
         Log.d(TAG, "Operation Mode: $streamConfigOpMode")
 
@@ -209,12 +225,31 @@ class CameraBase(val context: Context): CameraModule {
                 streamConfigOpMode, outConfigurations, HandlerExecutor(cameraHandler),
                 object : CameraCaptureSession.StateCallback() {
                     override fun onConfigured(s: CameraCaptureSession) {
-                        Log.d(TAG, "onConfigured session")
-                        session = s
                         // Set Default Camera Param
                         setDefaultCameraParam()
-                        // if there is no active surface, do not set setRepeatingRequest.
-                        if (streamSurfaceList.isNotEmpty()) session.setRepeatingRequest(previewRequest.build(), null, cameraHandler)
+
+                        if (previewFps == 120) {
+                            Log.i(TAG, "onConfigured HFR session")
+                            sessionHFR = s as CameraConstrainedHighSpeedCaptureSession
+                            // if there is no active surface, do not set setRepeatingBurst.
+                            if (streamSurfaceList.isNotEmpty()) {
+                                var requestList = sessionHFR.createHighSpeedRequestList(previewRequest.build())
+                                sessionHFR.setRepeatingBurst(requestList, null, cameraHandler)
+                            }
+                        } else {
+                            Log.i(TAG, "onConfigured session")
+                            session = s
+                            // if there is no active surface, do not set setRepeatingRequest.
+                            if (streamSurfaceList.isNotEmpty()) {
+                                if ((streamSurfaceList.size == 2) && (previewFps == 60 || previewFps == 90)) {
+                                    optimizePreviewFPS(previewFps)
+                                } else {
+                                    session.setRepeatingRequest(previewRequest.build(), null, cameraHandler)
+                                }
+                            }
+                        }
+                        isCameraReady = true
+                        Log.i(TAG, "isCameraReady true")
                     }
 
                     override fun onConfigureFailed(s: CameraCaptureSession) =
@@ -223,6 +258,7 @@ class CameraBase(val context: Context): CameraModule {
 
         config.sessionParameters = previewRequest.build()
         camera.createCaptureSession(config)
+        Log.i(TAG, "createSession exit")
     }
 
     private fun getJsonString(fileName: String): String? {
@@ -260,32 +296,28 @@ class CameraBase(val context: Context): CameraModule {
 
     @SuppressLint("Range")
     override fun addSnapshotStream(stream: StreamInfo) {
-        if (!::imageReader.isInitialized) {
-            val format = when (stream.encoding) {
-                "JPEG" -> ImageFormat.JPEG
-                "RAW" -> ImageFormat.RAW10
-                else -> {
-                    throw Exception("Unsupported image format: ${stream.encoding}")
-                }
-            }
-
-            if (format == ImageFormat.JPEG) {
-                imageReader = ImageReader.newInstance(
-                        stream.width, stream.height, format, IMAGE_BUFFER_SIZE)
-                // Set JPEG Quality
-                captureRequest.set(CaptureRequest.JPEG_QUALITY, IMAGE_JPEG_QUALITY)
-            } else if (format == ImageFormat.RAW10) {
-                val size = characteristics.get(
-                        CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)!!
-                        .getOutputSizes(format).maxByOrNull { it.height * it.width }!!
-                imageReader = ImageReader.newInstance(
-                        size.width, size.height, format, IMAGE_BUFFER_SIZE)
-            } else {
+        val format = when (stream.encoding) {
+            "JPEG" -> ImageFormat.JPEG
+            "RAW" -> ImageFormat.RAW10
+            else -> {
                 throw Exception("Unsupported image format: ${stream.encoding}")
             }
-
-            snapshotSurfaceList.add(imageReader.surface)
         }
+        if (format == ImageFormat.JPEG) {
+            imageReader = ImageReader.newInstance(
+                    stream.width, stream.height, format, IMAGE_BUFFER_SIZE)
+            // Set JPEG Quality
+            captureRequest.set(CaptureRequest.JPEG_QUALITY, IMAGE_JPEG_QUALITY)
+        } else if (format == ImageFormat.RAW10) {
+            val size = characteristics.get(
+                    CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)!!
+                    .getOutputSizes(format).maxByOrNull { it.height * it.width }!!
+            imageReader = ImageReader.newInstance(
+                    size.width, size.height, format, IMAGE_BUFFER_SIZE)
+        } else {
+            throw Exception("Unsupported image format: ${stream.encoding}")
+        }
+        snapshotSurfaceList.add(imageReader.surface)
     }
 
     override fun startCamera() {
@@ -293,6 +325,7 @@ class CameraBase(val context: Context): CameraModule {
     }
 
     private fun clearStreams() {
+        Log.i(TAG, "clearStreams")
         streamSurfaceList.clear()
         recorderList.clear()
         snapshotSurfaceList.clear()
@@ -312,69 +345,55 @@ class CameraBase(val context: Context): CameraModule {
         }
     }
 
-    override suspend fun takeSnapshot(orientation: Int?):
-        CombinedCaptureResult = suspendCoroutine { cont ->
-            @Suppress("ControlFlowWithEmptyBody")
-            while (imageReader.acquireNextImage() != null) {}
+    override fun takeSnapshot(orientation: Int?): CombinedCaptureResult {
+        @Suppress("ControlFlowWithEmptyBody")
+        Log.i(TAG, "takeSnapshot")
+        while (imageReader.acquireNextImage() != null) {
+        }
 
-            val imageQueue = ArrayBlockingQueue<Image>(IMAGE_BUFFER_SIZE)
-            imageReader.setOnImageAvailableListener({ reader ->
-                val image = reader.acquireNextImage()
-                Log.d(TAG, "Image available in queue: ${image.timestamp}")
-                imageQueue.add(image)
-            }, imageReaderHandler)
+        val imageQueue = ArrayBlockingQueue<Image>(IMAGE_BUFFER_SIZE)
+        imageReader.setOnImageAvailableListener({ reader ->
+            val image = reader.acquireNextImage()
+            Log.d(TAG, "Image available in queue: ${image.timestamp}")
+            imageQueue.add(image)
+        }, imageReaderHandler)
+        lateinit var combinedCaptureResult: CombinedCaptureResult
+        takeSnapshotSemaphore.acquire()
+        session.capture(captureRequest.build(), object : CameraCaptureSession.CaptureCallback() {
+            override fun onCaptureCompleted(
+                    session: CameraCaptureSession,
+                    request: CaptureRequest,
+                    result: TotalCaptureResult) {
+                super.onCaptureCompleted(session, request, result)
+                val resultTimestamp = result.get(CaptureResult.SENSOR_TIMESTAMP)
+                Log.d(TAG, "Capture result received: $resultTimestamp")
 
-            session.capture(captureRequest.build(), object : CameraCaptureSession.CaptureCallback() {
+                var image:Image
+                do {
+                    image = imageQueue.take()
+                } while (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+                        image.format != ImageFormat.DEPTH_JPEG &&
+                        image.timestamp != resultTimestamp)
+                Log.d(TAG, "Matching image dequeued: ${image.timestamp}")
 
-                override fun onCaptureStarted(
-                        session: CameraCaptureSession,
-                        request: CaptureRequest,
-                        timestamp: Long,
-                        frameNumber: Long) {
-                    super.onCaptureStarted(session, request, timestamp, frameNumber)
+                imageReader.setOnImageAvailableListener(null, null)
+                while (imageQueue.size > 0) {
+                    imageQueue.take().close()
                 }
-
-                override fun onCaptureCompleted(
-                        session: CameraCaptureSession,
-                        request: CaptureRequest,
-                        result: TotalCaptureResult) {
-                    super.onCaptureCompleted(session, request, result)
-                    val resultTimestamp = result.get(CaptureResult.SENSOR_TIMESTAMP)
-                    Log.d(TAG, "Capture result received: $resultTimestamp")
-
-                    val exc = TimeoutException("Image dequeuing took too long")
-                    val timeoutRunnable = Runnable { cont.resumeWithException(exc) }
-                    imageReaderHandler.postDelayed(timeoutRunnable, IMAGE_CAPTURE_TIMEOUT_MILLIS)
-
-                    @Suppress("BlockingMethodInNonBlockingContext")
-                    GlobalScope.launch(cont.context) {
-                        while (true) {
-                            val image = imageQueue.take()
-
-                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
-                                    image.format != ImageFormat.DEPTH_JPEG &&
-                                    image.timestamp != resultTimestamp) continue
-                            Log.d(TAG, "Matching image dequeued: ${image.timestamp}")
-
-                            imageReaderHandler.removeCallbacks(timeoutRunnable)
-                            imageReader.setOnImageAvailableListener(null, null)
-
-                            while (imageQueue.size > 0) {
-                                imageQueue.take().close()
-                            }
-
-                            // Compute EXIF orientation metadata
-                            val exifOrientation = getOrientationValueForRotation(orientation?:0)
-
-                            cont.resume(CombinedCaptureResult(
-                                    image, result, exifOrientation, imageReader.imageFormat))
-                        }
-                    }
-                }
-            }, cameraHandler)
+                // Compute EXIF orientation metadata
+                val exifOrientation = getOrientationValueForRotation(orientation ?: 0)
+                combinedCaptureResult = CombinedCaptureResult(image, result, exifOrientation, imageReader.imageFormat)
+                takeSnapshotSemaphore.release()
+            }
+        }, cameraHandler)
+        takeSnapshotSemaphore.acquire()
+        takeSnapshotSemaphore.release()
+        return combinedCaptureResult
     }
 
+
     suspend fun saveResult(result: CombinedCaptureResult): String? = suspendCoroutine { cont ->
+        Log.i(TAG, "saveResult")
         when (result.format) {
             ImageFormat.JPEG, ImageFormat.DEPTH_JPEG -> {
                 val buffer = result.image.planes[0].buffer
@@ -430,23 +449,29 @@ class CameraBase(val context: Context): CameraModule {
     }
 
     override fun close() {
+        Log.i(TAG, "close enter")
         if (::session.isInitialized) {
             session.stopRepeating()
             session.abortCaptures()
         }
-        camera.close()
-        synchronized(closeSync) {
-            closeSync.wait()
+
+        if (::sessionHFR.isInitialized) {
+            sessionHFR.stopRepeating()
+            sessionHFR.abortCaptures()
+        }
+
+        if (::camera.isInitialized) {
+            camera.close()
+            synchronized(closeSync) {
+                closeSync.wait(CLOSESYNC_TIMEOUT)
+            }
         }
         streamConfigOpMode = 0x00
+        Log.i(TAG, "close exit")
     }
 
     private fun setDefaultCameraParam() {
-        // Set Effect Mode to Off.
-        previewRequest.set(CaptureRequest.CONTROL_EFFECT_MODE, 0)
-        if (::captureRequest.isInitialized) {
-            captureRequest.set(CaptureRequest.CONTROL_EFFECT_MODE, 0)
-        }
+        Log.i(TAG, "setDefaultCameraParam")
 
         // Set AntiBanding to Auto
         previewRequest.set(CaptureRequest.CONTROL_AE_ANTIBANDING_MODE, 3)
@@ -524,6 +549,34 @@ class CameraBase(val context: Context): CameraModule {
         if (::captureRequest.isInitialized) {
             VendorTagUtil.setExposureMetering(captureRequest, 0)
         }
+
+        // Set Saturation to Level 5
+        VendorTagUtil.setSaturationLevel(previewRequest, 5)
+        if (::captureRequest.isInitialized) {
+            VendorTagUtil.setSaturationLevel(captureRequest, 5)
+        }
+
+        // Set Sharpness to Level 2
+        VendorTagUtil.setSharpnessLevel(previewRequest, 2)
+        if (::captureRequest.isInitialized) {
+            VendorTagUtil.setSharpnessLevel(captureRequest, 2)
+        }
+
+        // Set Exposure Value
+        previewRequest.set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION , exposureValue)
+        if (::captureRequest.isInitialized) {
+            captureRequest.set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION , exposureValue)
+        }
+    }
+
+    override fun setExposureValue(value: Int) {
+        Log.d(TAG, "Exposure Value: $value")
+        exposureValue = value
+    }
+
+    override fun setZSL(value: Boolean) {
+        Log.d(TAG, "ZSL Value: $value")
+        enableZSL = value
     }
 
     private fun updateRepeatingRequest() {
@@ -542,15 +595,6 @@ class CameraBase(val context: Context): CameraModule {
 
     override fun setTNREnable(value: Byte) {
         VendorTagUtil.setTNREnable(previewRequest, value)
-        updateRepeatingRequest()
-    }
-
-    override fun setEffectMode(value: Int) {
-        Log.d(TAG, "Effect mode: $value")
-        previewRequest.set(CaptureRequest.CONTROL_EFFECT_MODE, value)
-        if (::captureRequest.isInitialized) {
-            captureRequest.set(CaptureRequest.CONTROL_EFFECT_MODE, value)
-        }
         updateRepeatingRequest()
     }
 
@@ -676,62 +720,130 @@ class CameraBase(val context: Context): CameraModule {
         }
     }
 
-    override fun setDefog(value: Boolean) {
+    private fun optimizePreviewFPS(previewFps: Int) {
+        when (previewFps) {
+            60 -> {
+                var burstList = mutableListOf<CaptureRequest>()
+                burstList.add(previewRequest.build())
+                // First Surface is always display.
+                previewRequest.removeTarget(streamSurfaceList[0])
+                burstList.add(previewRequest.build())
+                session.setRepeatingBurst(burstList, null, cameraHandler)
+                previewRequest.addTarget(streamSurfaceList[0])
+            }
+            90 -> {
+                var burstList = mutableListOf<CaptureRequest>()
+                burstList.add(previewRequest.build())
+                // First Surface is always display.
+                previewRequest.removeTarget(streamSurfaceList[0])
+                burstList.add(previewRequest.build())
+                burstList.add(previewRequest.build())
+                session.setRepeatingBurst(burstList, null, cameraHandler)
+                previewRequest.addTarget(streamSurfaceList[0])
+            }
+        }
+    }
+
+    override fun setDefog(value: Boolean): Boolean {
         Log.d(TAG, "Defog: $value")
+        var jsonString: String? = null
         if (value) {
-            val jsonString = getJsonString("Defog_Table.json")
+            jsonString = getJsonString("Defog_Table.json")
             if (jsonString != null) {
                 showTextDialog("/Defog_Table.json")
-                VendorTagUtil.setDefog(previewRequest, jsonString)
-                VendorTagUtil.setDefog(captureRequest, jsonString)
-                updateRepeatingRequest()
             } else {
                 Log.e(TAG, "Defog Data is not available")
                 Toast.makeText(context, "Please push Defog_Table.json file to device.", Toast.LENGTH_SHORT).show()
+                return false
             }
         } else {
-            val jsonString = "{\"enable\" : 0}"
-            VendorTagUtil.setDefog(previewRequest, jsonString)
-            VendorTagUtil.setDefog(captureRequest, jsonString)
-            updateRepeatingRequest()
+            jsonString = "{\"enable\" : 0}"
         }
+        VendorTagUtil.setDefog(previewRequest, jsonString)
+        VendorTagUtil.setDefog(captureRequest, jsonString)
+        updateRepeatingRequest()
+        return true
     }
 
-    override fun setExposureTable(value: Boolean) {
+    override fun setExposureTable(value: Boolean): Boolean {
         Log.d(TAG, "ExposureTable: $value")
+        var jsonString: String? = null
         if (value) {
-            val jsonString = getJsonString("Exposure_Table.json")
+            jsonString = getJsonString("Exposure_Table.json")
             if (jsonString != null) {
                 showTextDialog("/Exposure_Table.json")
-                VendorTagUtil.setExposureTable(previewRequest, jsonString)
-                VendorTagUtil.setExposureTable(captureRequest, jsonString)
-                updateRepeatingRequest()
             } else {
                 Log.e(TAG, "Exposure Table is not available")
                 Toast.makeText(context, "Please push Exposure_Table.json file to device.", Toast.LENGTH_SHORT).show()
+                return false
             }
         } else {
-            val jsonString = "{\"isValid\" : 0}"
-            VendorTagUtil.setExposureTable(previewRequest, jsonString)
-            VendorTagUtil.setExposureTable(captureRequest, jsonString)
-            updateRepeatingRequest()
+            jsonString = "{\"isValid\" : 0}"
         }
+        VendorTagUtil.setExposureTable(previewRequest, jsonString)
+        VendorTagUtil.setExposureTable(captureRequest, jsonString)
+        updateRepeatingRequest()
+        return true
     }
 
-    override fun setANRTable(value: Boolean) {
+    override fun setANRTable(value: Boolean): Boolean {
         Log.d(TAG, "ANR: $value")
+        var jsonString: String? = null
         if (value) {
-            val jsonString = getJsonString("ANR_Table.json")
+            jsonString = getJsonString("ANR_Table.json")
             if (jsonString != null) {
                 showTextDialog("/ANR_Table.json")
-                VendorTagUtil.setANRTable(previewRequest, jsonString)
-                VendorTagUtil.setANRTable(captureRequest, jsonString)
-                updateRepeatingRequest()
             } else {
                 Log.e(TAG, "ANR Table is not available")
                 Toast.makeText(context, "Please push ANR_Table.json file to device.", Toast.LENGTH_SHORT).show()
+                return false
             }
+        } else {
+            jsonString = "{\n\"anr_intensity\" : 0.0,\n\"anr_motion_sensitivity\" : 0.0\n}"
         }
+        VendorTagUtil.setANRTable(previewRequest, jsonString)
+        VendorTagUtil.setANRTable(captureRequest, jsonString)
+        updateRepeatingRequest()
+        return true
+    }
+
+    override fun setLTMTable(value: Boolean): Boolean {
+        Log.d(TAG, "LTM: $value")
+        var jsonString: String? = null
+        if (value) {
+            jsonString = getJsonString("LTM_Table.json")
+            if (jsonString != null) {
+                showTextDialog("/LTM_Table.json")
+            } else {
+                Log.e(TAG, "LTM Table is not available")
+                Toast.makeText(context, "Please push LTM_Table.json file to device.", Toast.LENGTH_SHORT).show()
+                return false
+            }
+        } else {
+            jsonString = "{\n\"ltmDynamicContrastStrength\" : 0.0,\n\"ltmDarkBoostStrength\" : 0.0,\n\"ltmBrightSupressStrength\" : 0.0\n}"
+        }
+        VendorTagUtil.setLTMTable(previewRequest, jsonString)
+        VendorTagUtil.setLTMTable(captureRequest, jsonString)
+        updateRepeatingRequest()
+        return true
+    }
+
+    override fun setSaturationLevel(value: Int) {
+        Log.d(TAG, "Saturation Level: $value")
+        VendorTagUtil.setSaturationLevel(previewRequest, value)
+        if (::captureRequest.isInitialized) {
+            VendorTagUtil.setSaturationLevel(captureRequest, value)
+        }
+        updateRepeatingRequest()
+    }
+
+    override fun setSharpnessLevel(value: Int) {
+        Log.d(TAG, "Sharpness Level: $value")
+        VendorTagUtil.setSharpnessLevel(previewRequest, value)
+        if (::captureRequest.isInitialized) {
+            VendorTagUtil.setSharpnessLevel(captureRequest, value)
+        }
+        updateRepeatingRequest()
     }
 
     override fun setNRMode(value: Int) {
@@ -777,7 +889,8 @@ class CameraBase(val context: Context): CameraModule {
             override fun close() = image.close()
         }
 
-        private const val IMAGE_BUFFER_SIZE: Int = 3
+        private const val CLOSESYNC_TIMEOUT = 1000L
+        private const val IMAGE_BUFFER_SIZE: Int = 8
         private const val IMAGE_CAPTURE_TIMEOUT_MILLIS: Long = 5000
         private const val IMAGE_JPEG_QUALITY: Byte = 85
 
@@ -785,6 +898,7 @@ class CameraBase(val context: Context): CameraModule {
         private const val STREAM_CONFIG_ZZHDR_MODE: Int = 0xF002
         private const val STREAM_CONFIG_EIS_MODE: Int = 0xF200
         private const val STREAM_CONFIG_LDC_MODE: Int = 0xF800
+        private const val HIGH_SPEED_SESSION: Int = 1
 
         private fun createFile(context: Context, extension: String): File {
             val dir = File(Environment.getExternalStoragePublicDirectory(

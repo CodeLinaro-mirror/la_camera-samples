@@ -52,26 +52,24 @@
 
 package com.example.android.camera2.video
 
-import android.Manifest
-import android.content.Context
 import android.app.Activity
+import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Bundle
 import android.util.Log
 import android.view.MotionEvent
 import android.view.View
-import android.widget.ArrayAdapter
 import android.widget.FrameLayout
 import android.widget.LinearLayout
-import android.widget.Spinner
 import androidx.appcompat.app.AppCompatActivity
-import androidx.core.app.ActivityCompat
 import androidx.core.view.MotionEventCompat
-import androidx.fragment.app.FragmentActivity
-import androidx.fragment.app.add
 import androidx.fragment.app.commit
 import androidx.fragment.app.replace
-import com.example.android.camera2.video.fragments.*
+import androidx.preference.PreferenceManager
+import com.example.android.camera2.video.fragments.CameraFragmentMultiCam
+import com.example.android.camera2.video.fragments.CameraFragmentSettings
+import com.example.android.camera2.video.fragments.CameraFragmentVideo
+import com.example.android.camera2.video.fragments.PermissionsFragment
 import com.google.android.material.tabs.TabLayout
 import java.lang.ref.WeakReference
 
@@ -82,64 +80,94 @@ class CameraActivity : AppCompatActivity() {
     var lastNonSettingTab = 0
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        Log.i(TAG, "onCreate")
         super.onCreate(savedInstanceState)
         mActivity = WeakReference(this)
         setContentView(R.layout.activity_camera)
-        if (findViewById<View?>(R.id.fragment_container) != null) {
-            container = findViewById(R.id.fragment_container)
-            if (savedInstanceState != null) {
-                return;
-            }
-            if (PermissionsFragment.hasPermissions(applicationContext)) {
-                supportFragmentManager.commit {
-                    add<CameraFragmentSettings>(R.id.fragment_container, null, intent.extras)
-                }
-                supportFragmentManager.commit {
-                    replace<CameraFragmentVideo>(R.id.fragment_container, null, null)
-                }
-            } else {
-                supportFragmentManager.commit {
-                    replace<PermissionsFragment>(R.id.fragment_container, null, null)
-                }
-            }
+        container = findViewById(R.id.fragment_container)
+        if (savedInstanceState == null) {
+            switchToLaunchFragment()
         }
         val tabLayout = findViewById<TabLayout>(R.id.tabs_menu)
         tabLayout.addOnTabSelectedListener(object : TabLayout.OnTabSelectedListener {
             override fun onTabSelected(tab: TabLayout.Tab?) {
+                Log.i(TAG, "onTabSelected")
+                disableTabs()
                 tabUpdate(tab)
             }
 
-            override fun onTabReselected(tab: TabLayout.Tab?) {
-                tabUpdate(tab)
-            }
-
+            override fun onTabReselected(tab: TabLayout.Tab?) {}
             override fun onTabUnselected(tab: TabLayout.Tab?) {}
         })
     }
 
+    fun switchToLaunchFragment() {
+        Log.i(TAG, "switchToLaunchFragment")
+        if (PermissionsFragment.hasPermissions(applicationContext)) {
+            if (PreferenceManager.getDefaultSharedPreferences(this).getString("camera_fps", null) == null) {
+                supportFragmentManager.commit {
+                    Log.i(TAG, "replace<CameraFragmentSettings>")
+                    replace<CameraFragmentSettings>(R.id.fragment_container, null, null)
+                }
+            }
+            disableTabs()
+            supportFragmentManager.commit {
+                Log.i(TAG, "replace<CameraFragmentVideo>")
+                replace<CameraFragmentVideo>(R.id.fragment_container, null, null)
+            }
+            currentTab = 0
+        } else {
+            supportFragmentManager.commit {
+                Log.i(TAG, "replace<PermissionsFragment>")
+                replace<PermissionsFragment>(R.id.fragment_container, null, null)
+            }
+        }
+    }
+    fun enableTabs() {
+        Log.i(TAG, "enableTabs")
+        val tabLayout = findViewById<TabLayout>(R.id.tabs_menu)
+        val tabStrip = tabLayout.getChildAt(0) as LinearLayout
+        for (i in 0 until tabStrip.childCount) {
+            tabStrip.getChildAt(i).isClickable = true
+        }
+    }
+
+    private fun disableTabs() {
+        Log.i(TAG, "disableTabs")
+        val tabLayout = findViewById<TabLayout>(R.id.tabs_menu)
+        val tabStrip = tabLayout.getChildAt(0) as LinearLayout
+        for (i in 0 until tabStrip.childCount) {
+            tabStrip.getChildAt(i).isClickable = false
+        }
+    }
+
     fun tabUpdate(tab: TabLayout.Tab?) {
+        Log.i(TAG, "tabUpdate ${tab!!.position}")
         when (tab!!.position) {
             0 -> supportFragmentManager.commit {
+                Log.i(TAG, "replace<CameraFragmentVideo>")
                 replace<CameraFragmentVideo>(R.id.fragment_container, null, null)
                 lastNonSettingTab = 0
+                currentTab = 0
             }
             1 -> supportFragmentManager.commit {
-                replace<CameraFragmentSnapshot>(R.id.fragment_container, null, null)
+                Log.i(TAG, "replace<CameraFragmentMultiCam>")
+                replace<CameraFragmentMultiCam>(R.id.fragment_container, null, null)
                 lastNonSettingTab = 1
+                currentTab = 1
             }
             2 -> supportFragmentManager.commit {
-                replace<CameraFragmentMultiCam>(R.id.fragment_container, null, null)
-                lastNonSettingTab = 2
-            }
-            3 -> supportFragmentManager.commit {
+                Log.i(TAG, "replace<CameraFragmentSettings>")
                 replace<CameraFragmentSettings>(R.id.fragment_container, null, null)
+                currentTab = 2
             }
         }
     }
 
     override fun onBackPressed() {
+        Log.i(TAG, "onBackPressed")
         val tabLayout = findViewById<TabLayout>(R.id.tabs_menu)
-        if (tabLayout.selectedTabPosition == 3) {
+        if (tabLayout.selectedTabPosition == 2) {
             tabLayout.getTabAt(lastNonSettingTab)?.select()
         } else {
             super.onBackPressed()
@@ -157,6 +185,7 @@ class CameraActivity : AppCompatActivity() {
     }
 
     override fun onResume() {
+        Log.i(TAG, "onResume")
         super.onResume()
         // Before setting full screen flags, we must wait a bit to let UI settle; otherwise, we may
         // be trying to set app to immersive mode before it's ready and the flags do not stick
@@ -165,12 +194,19 @@ class CameraActivity : AppCompatActivity() {
         }, IMMERSIVE_FLAG_TIMEOUT)
     }
 
+    override fun onPause() {
+        Log.i(TAG, "onPause")
+        super.onPause()
+    }
+
     override fun onDestroy() {
-        mActivity?.clear();
+        Log.i(TAG, "onDestroy")
+        mActivity?.clear()
         super.onDestroy()
     }
 
     companion object {
+        var currentTab: Int = 100
         var mActivity: WeakReference<Activity>? = null
         /** Combination of all flags required to put activity into immersive mode */
         const val FLAGS_FULLSCREEN =

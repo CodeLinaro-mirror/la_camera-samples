@@ -62,7 +62,9 @@ data class StreamInfo(
 
 data class CameraParameters(val eis_enable: Boolean = false,
                             val ldc_enable: Boolean = false,
-                            val shdr_enable: Boolean = false)
+                            val shdr_enable: Boolean = false,
+                            val exposure_value: Int = 0,
+                            val hal_zsl_enable: Boolean = true)
 
 data class CameraSettings(var previewInfo: StreamInfo,
                           var recorderInfo: MutableList<StreamInfo>,
@@ -70,6 +72,7 @@ data class CameraSettings(var previewInfo: StreamInfo,
                           var cameraParams: CameraParameters,
                           var cameraId: String,
                           var displayOn: Boolean,
+                          var snapshotOn: Boolean,
                           var threeCamUse: Boolean)
 
 interface CameraModule {
@@ -87,12 +90,11 @@ interface CameraModule {
     fun startRecording(value: Int?)
     fun isRecording() : Boolean
     fun stopRecording()
-    suspend fun takeSnapshot(value: Int?): CombinedCaptureResult
+    fun takeSnapshot(value: Int?): CombinedCaptureResult
     fun close()
     fun setEISEnable(value: Boolean)
     fun setLDCEnable(value: Boolean)
     fun setTNREnable(value: Byte)
-    fun setEffectMode(value: Int)
     fun setNRMode(value: Int)
     fun setSHDREnable(value: Boolean)
     fun setAELock(value: Boolean)
@@ -106,7 +108,12 @@ interface CameraModule {
     fun setExpMeteringMode(value: Int)
     fun setISOMode(value: Long)
     fun setZoom(value: Int)
-    fun setDefog(value: Boolean)
-    fun setExposureTable(value: Boolean)
-    fun setANRTable(value: Boolean)
+    fun setDefog(value: Boolean) : Boolean
+    fun setExposureTable(value: Boolean) : Boolean
+    fun setANRTable(value: Boolean) : Boolean
+    fun setLTMTable(value: Boolean) : Boolean
+    fun setSaturationLevel(value: Int)
+    fun setSharpnessLevel(value: Int)
+    fun setExposureValue(value: Int)
+    fun setZSL(value: Boolean)
 }

@@ -37,31 +37,37 @@ package com.example.android.camera2.video.fragments
 import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
 import android.graphics.Color
 import android.hardware.camera2.*
 import android.media.ExifInterface
 import android.media.MediaActionSound
+import android.media.ThumbnailUtils
 import android.os.Bundle
 import android.os.SystemClock
+import android.provider.MediaStore
 import android.util.Log
 import android.util.Size
 import android.view.*
+import androidx.core.graphics.drawable.RoundedBitmapDrawable
+import androidx.core.graphics.drawable.RoundedBitmapDrawableFactory
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.Observer
 import androidx.lifecycle.lifecycleScope
 import com.example.android.camera.utils.AutoFitSurfaceView
 import com.example.android.camera.utils.OrientationLiveData
-import com.example.android.camera.utils.getDisplaySmartSize
 import com.example.android.camera.utils.getPreviewOutputSize
 import com.example.android.camera2.video.*
 import com.example.android.camera2.video.CameraActivity.Companion.printAppVersion
 import com.example.android.camera2.video.MediaCodecRecorder.Companion.MIN_REQUIRED_RECORDING_TIME_MILLIS
 import com.example.android.camera2.video.overlay.VideoOverlay
 import kotlinx.android.synthetic.main.fragment_camera_multicam.*
+import kotlinx.android.synthetic.main.fragment_camera_multicam.capture_button
+import kotlinx.android.synthetic.main.fragment_camera_multicam.recorder_button
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 
-class CameraFragmentMultiCam : Fragment() {
+class CameraFragmentMultiCam : Fragment(),CameraReadyListener {
     private val cameraManager: CameraManager by lazy {
         val context = requireContext().applicationContext
         context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
@@ -92,6 +98,8 @@ class CameraFragmentMultiCam : Fragment() {
     private val camera1Id = "1"
     private val camera2Id = "2"
 
+    var readyCount = 0
+
     override fun onCreateView(
             inflater: LayoutInflater,
             container: ViewGroup?,
@@ -100,13 +108,18 @@ class CameraFragmentMultiCam : Fragment() {
 
     @SuppressLint("MissingPermission")
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
+        Log.i(TAG, "onViewCreated")
         super.onViewCreated(view, savedInstanceState)
         printAppVersion(requireContext().applicationContext)
         cameraBase0 = CameraBase(requireContext().applicationContext)
+        cameraBase0.listeners.add(this)
         cameraBase1 = CameraBase(requireContext().applicationContext)
+        cameraBase1.listeners.add(this)
         settings = CameraSettingsUtil.getCameraSettings(requireContext().applicationContext)
 
-        // If there is not recording stream, disable recording button.
+        // Make Snapshot button invisible if there is no snapshot stream
+        if (!settings.snapshotOn) capture_button.visibility = View.INVISIBLE
+        // Make Video Record button invisible if there is no encoder stream
         if (settings.recorderInfo.isEmpty()) recorder_button.visibility = View.INVISIBLE
 
         characteristics0 = cameraManager.getCameraCharacteristics(camera0Id)
@@ -114,6 +127,7 @@ class CameraFragmentMultiCam : Fragment() {
 
         if (settings.threeCamUse) {
             cameraBase2 = CameraBase(requireContext().applicationContext)
+            cameraBase2.listeners.add(this)
             characteristics2 = cameraManager.getCameraCharacteristics(camera2Id)
         }
 
@@ -157,22 +171,19 @@ class CameraFragmentMultiCam : Fragment() {
         })
 
         val cameraMenu = CameraMenu(this.context, view)
-        cameraMenu.setOnCameraMenuListener(object: CameraMenu.OnCameraMenuListener {
+        cameraMenu.setOnCameraMenuListener(object : CameraMenu.OnCameraMenuListener {
             override fun onAELock(value: Boolean) {
                 cameraBase0.setAELock(value)
                 cameraBase1.setAELock(value)
                 Log.d(TAG, "AE Lock: $value")
             }
+
             override fun onAWBLock(value: Boolean) {
                 cameraBase0.setAWBLock(value)
                 cameraBase1.setAWBLock(value)
                 Log.d(TAG, "AWB Lock: $value")
             }
-            override fun onEffectMode(value: Int) {
-                cameraBase0.setEffectMode(value)
-                cameraBase1.setEffectMode(value)
-                Log.d(TAG, "Effect mode: $value")
-            }
+
             override fun onNRMode(value: Int) {
                 cameraBase0.setNRMode(value)
                 cameraBase1.setNRMode(value)
@@ -232,22 +243,37 @@ class CameraFragmentMultiCam : Fragment() {
                 cameraBase1.setZoom(value)
                 Log.d(TAG, "Zoom value: $value")
             }
-            override fun onDefog(value: Boolean) {
-                cameraBase0.setDefog(value)
-                cameraBase1.setDefog(value)
+
+            override fun onDefog(value: Boolean): Boolean {
                 Log.d(TAG, "Defog value: $value")
+                return (cameraBase0.setDefog(value) && cameraBase1.setDefog(value))
             }
 
-            override fun onExposureTable(value: Boolean) {
-                cameraBase0.setExposureTable(value)
-                cameraBase1.setExposureTable(value)
+            override fun onExposureTable(value: Boolean): Boolean {
                 Log.d(TAG, "Exposure value: $value")
+                return (cameraBase0.setExposureTable(value) && cameraBase1.setExposureTable(value))
             }
 
-            override fun onANRTable(value: Boolean) {
-                cameraBase0.setANRTable(value)
-                cameraBase1.setANRTable(value)
+            override fun onANRTable(value: Boolean): Boolean {
                 Log.d(TAG, "ANR value: $value")
+                return (cameraBase0.setANRTable(value) && cameraBase1.setANRTable(value))
+            }
+
+            override fun onLTMTable(value: Boolean): Boolean {
+                Log.d(TAG, "LTM value: $value")
+                return (cameraBase0.setLTMTable(value) && cameraBase1.setLTMTable(value))
+            }
+
+            override fun onSaturationLevel(value: Int) {
+                cameraBase0.setSaturationLevel(value)
+                cameraBase1.setSaturationLevel(value)
+                Log.d(TAG, "Saturation Level: $value")
+            }
+
+            override fun onSharpnessLevel(value: Int) {
+                cameraBase0.setSharpnessLevel(value)
+                cameraBase1.setSharpnessLevel(value)
+                Log.d(TAG, "Sharpness Level: $value")
             }
         })
         view.setOnClickListener() {
@@ -288,7 +314,23 @@ class CameraFragmentMultiCam : Fragment() {
         chronometer_dual.stop()
     }
 
+    private fun createThumb(path: String?,type: Int): Bitmap? {
+        return if(type== THUMBNAIL_TYPE_IMAGE) {
+            path?.let { ThumbnailUtils.createImageThumbnail(it, MediaStore.Images.Thumbnails.MICRO_KIND) }
+        } else {
+            path?.let { ThumbnailUtils.createVideoThumbnail(it, MediaStore.Video.Thumbnails.MICRO_KIND) }
+        }
+    }
+
+    private fun createRoundThumb(path: String?, type: Int) : RoundedBitmapDrawable {
+        Log.i(TAG, "createRoundThumb path=$path type=$type")
+        val drawable = RoundedBitmapDrawableFactory.create(resources, createThumb(path,type))
+        drawable.isCircular = true
+        return drawable
+    }
+
     private fun addCameraStreams(camBase: CameraBase, settings: CameraSettings, previewSurface: Surface, previewSize: Size) {
+        Log.i(TAG, "addCameraStreams start")
         var availableCameraStreams = MAX_CAMERA_STREAMS
 
         if (settings.displayOn) {
@@ -297,14 +339,19 @@ class CameraFragmentMultiCam : Fragment() {
                 previewOverlay.setTextOverlay("Preview overlay", 0.0f, 100.0f, 100.0f, Color.WHITE, 0.5f)
                 videoOverlayList.add(previewOverlay)
                 camBase.addPreviewStream(previewOverlay.getInputSurface())
+                Log.i(TAG, "addCameraStreams preview ${settings.previewInfo}")
             } else {
                 camBase.addPreviewStream(previewSurface)
+                Log.i(TAG, "addCameraStreams preview ${settings.previewInfo}")
             }
             availableCameraStreams--
         }
 
-        camBase.addSnapshotStream(settings.snapshotInfo)
-        availableCameraStreams--
+        if (settings.snapshotOn) {
+            camBase.addSnapshotStream(settings.snapshotInfo)
+            Log.i(TAG, "addCameraStreams snapshot ${settings.snapshotInfo}")
+            availableCameraStreams--
+        }
 
         val sharedStreamSurfaces = mutableListOf<Surface>()
         var sharedStreamsSize: Size = Size(0,0)
@@ -326,9 +373,12 @@ class CameraFragmentMultiCam : Fragment() {
                 if (availableCameraStreams > 1) {
                     videoOverlay = VideoOverlay(recorder.getRecorderSurface(), stream.width, stream.height, stream.fps.toFloat(), camBase.getSensorOrientation().toFloat())
                     camBase.addStream(videoOverlay.getInputSurface())
+                    Log.i(TAG, "addCameraStreams encoded stream$streamCount $stream")
+                    availableCameraStreams--
                 } else {
                     videoOverlay = VideoOverlay(recorder.getRecorderSurface(), sharedStreamsSize.width, sharedStreamsSize.height, stream.fps.toFloat(), camBase.getSensorOrientation().toFloat())
                     sharedStreamSurfaces.add(videoOverlay.getInputSurface())
+                    Log.i(TAG, "addCameraStreams encoded stream$streamCount $stream")
                 }
                 videoOverlay.setTextOverlay("Stream $streamCount overlay",
                         0.0f, 100.0f, 100.0f, Color.WHITE, 0.5f)
@@ -336,19 +386,23 @@ class CameraFragmentMultiCam : Fragment() {
             } else {
                 if (availableCameraStreams > 1) {
                     camBase.addStream(recorder.getRecorderSurface())
+                    Log.i(TAG, "addCameraStreams encoded stream$streamCount $stream")
+                    availableCameraStreams--
                 } else {
                     sharedStreamSurfaces.add(recorder.getRecorderSurface())
+                    Log.i(TAG, "addCameraStreams encoded stream$streamCount $stream")
                 }
             }
-            availableCameraStreams--
         }
         if (sharedStreamSurfaces.isNotEmpty()) {
             camBase.addSharedStream(sharedStreamSurfaces)
+            availableCameraStreams--
         }
     }
 
     @SuppressLint("ClickableViewAccessibility")
     private fun initializeCamera() = lifecycleScope.launch(Dispatchers.Main) {
+        Log.i(TAG, "initializeCamera")
         cameraBase0.openCamera(camera0Id)
 
         cameraBase0.setEISEnable(settings.cameraParams.eis_enable)
@@ -363,6 +417,8 @@ class CameraFragmentMultiCam : Fragment() {
             }
         }
         addCameraStreams(cameraBase0, settings, viewFinder0.holder.surface, previewSize0)
+        cameraBase0.setExposureValue(settings.cameraParams.exposure_value)
+        cameraBase0.setZSL(settings.cameraParams.hal_zsl_enable)
 
         cameraBase1.openCamera(camera1Id)
 
@@ -372,6 +428,8 @@ class CameraFragmentMultiCam : Fragment() {
         cameraBase1.setFramerate(settings.previewInfo.fps)
 
         addCameraStreams(cameraBase1, settings, viewFinder1.holder.surface, previewSize1)
+        cameraBase1.setExposureValue(settings.cameraParams.exposure_value)
+        cameraBase1.setZSL(settings.cameraParams.hal_zsl_enable)
 
         if (settings.threeCamUse) {
             cameraBase2.openCamera(camera2Id)
@@ -391,27 +449,34 @@ class CameraFragmentMultiCam : Fragment() {
             recorder_button.setOnClickListener {
                 if (recording) {
                     if (SystemClock.elapsedRealtime() - chronometer_dual.base > MIN_REQUIRED_RECORDING_TIME_MILLIS) {
+                        Log.i(TAG, "stopRecording enter")
                         cameraBase1.stopRecording()
                         cameraBase0.stopRecording()
                         sound.play(MediaActionSound.STOP_VIDEO_RECORDING)
                         recorder_button.setBackgroundResource(android.R.drawable.presence_video_online)
+                        if (settings.recorderInfo[0].storageEnable) thumbnailButton3.setImageDrawable(createRoundThumb(cameraBase0.getCurrentVideoFilePath(), THUMBNAIL_TYPE_VIDEO))
                         recording = false
                         stopChronometer()
+                        Log.i(TAG, "stopRecording exit")
                     } else {
                         Log.d(TAG, "Cannot record a video less than $MIN_REQUIRED_RECORDING_TIME_MILLIS ms")
                     }
                 } else {
+                    Log.i(TAG, "startRecording enter")
                     sound.play(MediaActionSound.START_VIDEO_RECORDING)
                     cameraBase0.startRecording(relativeOrientation0.value)
                     cameraBase1.startRecording(relativeOrientation1.value)
                     recorder_button.setBackgroundResource(android.R.drawable.presence_video_busy)
                     startChronometer()
                     recording = true
+                    Log.i(TAG, "startRecording exit")
                 }
             }
         }
         capture_button.setOnClickListener {
+            Log.i(TAG, "capture_button pressed")
             it.isEnabled = false
+            Log.i(TAG, "capture_button disabled")
             var snapshot0Flag = false
             var snapshot1Flag = false
             var snapshot2Flag = false
@@ -433,7 +498,13 @@ class CameraFragmentMultiCam : Fragment() {
                 }
                 snapshot0Flag = true
                 if (snapshot0Flag and snapshot1Flag and snapshot2Flag) {
-                    it.post { it.isEnabled = true }
+                    it.post {
+                        if (settings.snapshotInfo.encoding == "JPEG") {
+                            thumbnailButton3.setImageDrawable(createRoundThumb(cameraBase0.currentSnapshotFilePath, THUMBNAIL_TYPE_IMAGE))
+                        }
+                        it.isEnabled = true
+                        Log.i(TAG, "capture_button enabled")
+                    }
                 }
             }
             lifecycleScope.launch(Dispatchers.IO) {
@@ -451,7 +522,13 @@ class CameraFragmentMultiCam : Fragment() {
                 }
                 snapshot1Flag = true
                 if (snapshot0Flag and snapshot1Flag and snapshot2Flag) {
-                    it.post { it.isEnabled = true }
+                    it.post {
+                        if (settings.snapshotInfo.encoding == "JPEG") {
+                            thumbnailButton3.setImageDrawable(createRoundThumb(cameraBase0.currentSnapshotFilePath, THUMBNAIL_TYPE_IMAGE))
+                        }
+                        it.isEnabled = true
+                        Log.i(TAG, "capture_button enabled")
+                    }
                 }
             }
             if (settings.threeCamUse) {
@@ -462,7 +539,13 @@ class CameraFragmentMultiCam : Fragment() {
                     }
                     snapshot2Flag = true
                     if (snapshot0Flag and snapshot1Flag and snapshot2Flag) {
-                        it.post { it.isEnabled = true }
+                        it.post {
+                            if (settings.snapshotInfo.encoding == "JPEG") {
+                                thumbnailButton3.setImageDrawable(createRoundThumb(cameraBase0.currentSnapshotFilePath, THUMBNAIL_TYPE_IMAGE))
+                            }
+                            it.isEnabled = true
+                            Log.i(TAG, "capture_button enabled")
+                        }
                     }
                 }
             }
@@ -479,13 +562,22 @@ class CameraFragmentMultiCam : Fragment() {
         }
     }
 
+    override fun onResume() {
+        Log.i(TAG, "onResume")
+        super.onResume()
+    }
+
     override fun onPause() {
+        Log.i(TAG, "onPause")
         if (recording) {
+            Log.i(TAG, "stopRecording enter")
             cameraBase1.stopRecording()
             cameraBase0.stopRecording()
             recorder_button.setBackgroundResource(android.R.drawable.presence_video_online)
+            if (settings.recorderInfo[0].storageEnable) thumbnailButton3.setImageDrawable(createRoundThumb(cameraBase0.getCurrentVideoFilePath(), THUMBNAIL_TYPE_VIDEO))
             recording = false
             stopChronometer()
+            Log.i(TAG, "stopRecording exit")
         }
         try {
             cameraBase0.close()
@@ -500,7 +592,31 @@ class CameraFragmentMultiCam : Fragment() {
         super.onPause()
     }
 
+    override fun onDestroy() {
+        Log.i(TAG, "onDestroy")
+        super.onDestroy()
+    }
+
+    override fun onIsCameraReadyUpdated(oldIsCameraReady: Boolean, newIsCameraReady: Boolean) {
+        Log.i(TAG, "onIsCameraReadyUpdated $oldIsCameraReady to $newIsCameraReady")
+        readyCount++
+        when (readyCount) {
+            2 -> {
+                if (!CameraSettingsUtil.getCameraSettings(requireContext().applicationContext).threeCamUse) {
+                    readyCount = 0
+                    (CameraActivity.mActivity?.get() as CameraActivity).enableTabs()
+                }
+            }
+            3 -> {
+                readyCount = 0
+                (CameraActivity.mActivity?.get() as CameraActivity).enableTabs()
+            }
+        }
+    }
+
     companion object {
+        const val THUMBNAIL_TYPE_IMAGE = 1
+        const val THUMBNAIL_TYPE_VIDEO = 2
         private val TAG = CameraFragmentMultiCam::class.java.simpleName
         var recording = false
         const val MAX_CAMERA_STREAMS = 3
