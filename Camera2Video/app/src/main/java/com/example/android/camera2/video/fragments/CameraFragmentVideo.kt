@@ -51,6 +51,8 @@ import android.provider.MediaStore
 import android.util.Log
 import android.util.Size
 import android.view.*
+import androidx.appcompat.content.res.AppCompatResources
+import androidx.core.content.ContextCompat
 import androidx.core.graphics.drawable.RoundedBitmapDrawable
 import androidx.core.graphics.drawable.RoundedBitmapDrawableFactory
 import androidx.fragment.app.Fragment
@@ -126,9 +128,15 @@ class CameraFragmentVideo : Fragment(),CameraReadyListener {
                     height: Int) = Unit
 
             override fun surfaceCreated(holder: SurfaceHolder) {
-                previewSize = getPreviewOutputSize(
-                        viewFinder.display, characteristics, SurfaceHolder::class.java)
-
+                previewSize = if (settings.previewInfo.fps > 30 && settings.cameraId != "4") {
+                    Size(1280, 720)
+                } else if (settings.cameraId == "4") {
+                    // For logical camera keep w X h into 2:1.
+                    Size(1440, 720)
+                } else {
+                    getPreviewOutputSize(
+                            viewFinder.display, characteristics, SurfaceHolder::class.java)
+                }
                 Log.d(TAG, "View finder size: ${viewFinder.width} x ${viewFinder.height}")
                 Log.d(TAG, "Selected preview size: $previewSize")
                 viewFinder.setAspectRatio(previewSize.width, previewSize.height)
@@ -358,34 +366,56 @@ class CameraFragmentVideo : Fragment(),CameraReadyListener {
         cameraBase.startCamera()
 
         val sound = MediaActionSound()
-        if(settings.snapshotOn) {
+        if (settings.snapshotOn) {
             capture_button.setOnClickListener {
                 Log.i(TAG, "capture_button pressed")
-                it.isEnabled = false
-                Log.i(TAG, "capture_button disabled")
-                lifecycleScope.launch(Dispatchers.IO) {
-                    cameraBase.takeSnapshot(relativeOrientation.value).use { result ->
-                        Log.d(TAG, "Result received: $result")
-                        val outputFilePath = cameraBase.saveResult(result)
-
-                        // If the result is a JPEG file, update EXIF metadata with orientation info
-                        if (outputFilePath?.substring(outputFilePath!!.lastIndexOf(".")) == ".jpg") {
-                            val exif = ExifInterface(outputFilePath)
-                            exif.setAttribute(ExifInterface.TAG_ORIENTATION, result.orientation.toString())
-                            exif.saveAttributes()
-                            Log.d(TAG, "EXIF metadata saved: $outputFilePath")
+                if(settings.mjpegOn) {
+                    if(recordingMJPEG) {
+                        if(SystemClock.elapsedRealtime() - chronometer.base > MIN_REQUIRED_RECORDING_TIME_MILLIS) {
+                            cameraBase.takeMJPEG(false)
+                            capture_button.background = AppCompatResources.getDrawable(requireContext(), R.drawable.ic_shutter)
+                            stopChronometer()
+                            sound.play(MediaActionSound.SHUTTER_CLICK)
+                            recordingMJPEG = false
+                            Log.i(TAG, "recordingMJPEG stopped")
+                        } else {
+                            Log.d(TAG, "Cannot record mjpeg less than $MIN_REQUIRED_RECORDING_TIME_MILLIS ms")
                         }
+                    } else if (CameraActivity.enoughStorageAvailable()) {
+                        Log.i(TAG, "recordingMJPEG started")
+                        recordingMJPEG = true
+                        sound.play(MediaActionSound.SHUTTER_CLICK)
+                        capture_button.background = AppCompatResources.getDrawable(requireContext(), R.drawable.ic_shutter_mjpeg)
+                        cameraBase.takeMJPEG(true)
+                        startChronometer()
                     }
-                    it.post {
-                        if (settings.snapshotInfo.encoding == "JPEG") {
-                            broadcastFile(cameraBase.currentSnapshotFilePath)
-                            thumbnailButton.setImageDrawable(createRoundThumb(cameraBase.currentSnapshotFilePath, THUMBNAIL_TYPE_IMAGE))
+                } else if (CameraActivity.enoughStorageAvailable()) {
+                    sound.play(MediaActionSound.SHUTTER_CLICK)
+                    it.isEnabled = false
+                    Log.i(TAG, "capture_button disabled")
+                    lifecycleScope.launch(Dispatchers.IO) {
+                        cameraBase.takeSnapshot(relativeOrientation.value).use { result ->
+                            Log.d(TAG, "Result received: $result")
+                            val outputFilePath = cameraBase.saveResult(result)
+
+                            // If the result is a JPEG file, update EXIF metadata with orientation info
+                            if (outputFilePath?.substring(outputFilePath!!.lastIndexOf(".")) == ".jpg") {
+                                val exif = ExifInterface(outputFilePath)
+                                exif.setAttribute(ExifInterface.TAG_ORIENTATION, result.orientation.toString())
+                                exif.saveAttributes()
+                                Log.d(TAG, "EXIF metadata saved: $outputFilePath")
+                            }
                         }
-                        it.isEnabled = true
-                        Log.i(TAG, "capture_button enabled")
+                        it.post {
+                            if (settings.snapshotInfo.encoding == "JPEG") {
+                                broadcastFile(cameraBase.currentSnapshotFilePath)
+                                thumbnailButton.setImageDrawable(createRoundThumb(cameraBase.currentSnapshotFilePath, THUMBNAIL_TYPE_IMAGE))
+                            }
+                            it.isEnabled = true
+                            Log.i(TAG, "capture_button enabled")
+                        }
                     }
                 }
-                sound.play(MediaActionSound.SHUTTER_CLICK)
             }
         }
         if (settings.recorderInfo.isNotEmpty()) {
@@ -405,13 +435,15 @@ class CameraFragmentVideo : Fragment(),CameraReadyListener {
                         Log.d(TAG, "Cannot record a video less than $MIN_REQUIRED_RECORDING_TIME_MILLIS ms")
                     }
                 } else {
-                    Log.i(TAG, "startRecording enter")
-                    sound.play(MediaActionSound.START_VIDEO_RECORDING)
-                    cameraBase.startRecording(relativeOrientation.value)
-                    recorder_button.setBackgroundResource(android.R.drawable.presence_video_busy)
-                    startChronometer()
-                    recording = true
-                    Log.i(TAG, "startRecording exit")
+                    if (CameraActivity.enoughStorageAvailable()) {
+                        Log.i(TAG, "startRecording enter")
+                        sound.play(MediaActionSound.START_VIDEO_RECORDING)
+                        cameraBase.startRecording(relativeOrientation.value)
+                        recorder_button.setBackgroundResource(android.R.drawable.presence_video_busy)
+                        startChronometer()
+                        recording = true
+                        Log.i(TAG, "startRecording exit")
+                    }
                 }
             }
         }
@@ -438,6 +470,13 @@ class CameraFragmentVideo : Fragment(),CameraReadyListener {
 
     override fun onPause() {
         Log.i(TAG, "onPause")
+        if (recordingMJPEG) {
+            cameraBase.takeMJPEG(false)
+            capture_button.background = AppCompatResources.getDrawable(requireContext(), R.drawable.ic_shutter)
+            stopChronometer()
+            recordingMJPEG = false
+            Log.i(TAG, "recordingMJPEG stopped")
+        }
         if (recording) {
             Log.i(TAG, "stopRecording enter")
             cameraBase.stopRecording()
@@ -474,6 +513,7 @@ class CameraFragmentVideo : Fragment(),CameraReadyListener {
         const val THUMBNAIL_TYPE_VIDEO = 2
         private val TAG = CameraFragmentVideo::class.java.simpleName
         var recording = false
+        var recordingMJPEG = false
         const val MAX_CAMERA_STREAMS = 3
     }
 }
