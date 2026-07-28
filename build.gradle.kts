@@ -26,7 +26,17 @@ plugins {
     alias(libs.plugins.spotless) apply false
 }
 
-apply(from = "createSample.gradle.kts")
+tasks.register<CreateSampleTask>("createSample") {
+    description = "Generates a new compose-first camera sample for the Camera Samples Catalog"
+    group = "generation"
+
+    sampleName.set(providers.gradleProperty("sampleName"))
+    screenName.set(providers.gradleProperty("screenName"))
+    title.set(providers.gradleProperty("title"))
+    desc.set(providers.gradleProperty("desc"))
+    type.set(providers.gradleProperty("type"))
+    rootDirPath.set(rootDir.absolutePath)
+}
 
 // Dagger/Hilt 2.57+ unshades kotlin-metadata-jvm, so it can be overridden independently. Force it to
 // match the Kotlin compiler (2.4.0) — otherwise the Hilt aggregating processor (hiltJavaCompileDebug)
