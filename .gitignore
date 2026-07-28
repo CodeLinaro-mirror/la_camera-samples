@@ -34,3 +34,15 @@ proguard-project.txt
 # Android Studio/IDEA
 *.iml
 .idea
+
+# Agents
+.claude/
+.cursor/
+.codex/
+.copilot/
+.aider.chat.history.md
+.aider.tags.cache.v3
+.windsurf/
+.codeium/
+.cline/
+.anthropic/

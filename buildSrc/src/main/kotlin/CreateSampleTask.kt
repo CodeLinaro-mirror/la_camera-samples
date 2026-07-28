@@ -15,10 +15,6 @@ import org.gradle.api.tasks.TaskAction
  *     -Ptitle="Camera2 • Flash" \
  *     -Pdesc="Toggle the flash with Camera2" \
  *     -Ptype="camera2"          # camera2 (default) or camerax
- *
- * It generates a compose-first module (UiState / ViewModel / Controller / Screen) that already
- * shows a working camera preview behind CameraSampleScaffold, then registers it in
- * settings.gradle.kts, app/build.gradle.kts, strings.xml and SampleCatalog.kt.
  */
 abstract class CreateSampleTask : DefaultTask() {
     @get:Input
@@ -107,7 +103,7 @@ abstract class CreateSampleTask : DefaultTask() {
         File(sampleDir, "proguard-rules.pro").writeText(
             "# Add project specific ProGuard rules here.\n" +
                 "# By default, the flags in this file are appended to flags specified\n" +
-                "# in \$ANDROID_SDK/tools/proguard/proguard-android.txt\n",
+                "# in ${'$'}ANDROID_SDK/tools/proguard/proguard-android.txt\n",
         )
 
         File(srcDir, "${base}UiState.kt").writeText(uiState(pkgName, base))
@@ -117,16 +113,6 @@ abstract class CreateSampleTask : DefaultTask() {
         )
         File(srcDir, "$scName.kt").writeText(
             if (isCameraX) cameraXScreen(pkgName, base, scName) else camera2Screen(pkgName, base, scName),
-        )
-
-        // Per-sample string resources: keep user-facing text out of the Kotlin and in strings.xml.
-        val resValuesDir = File(sampleDir, "src/main/res/values")
-        resValuesDir.mkdirs()
-        File(resValuesDir, "strings.xml").writeText(
-            "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n" +
-                "<resources>\n" +
-                "    <!-- Add this sample's user-facing strings here; read them with stringResource(R.string.…). -->\n" +
-                "</resources>\n",
         )
 
         // settings.gradle.kts
@@ -142,8 +128,8 @@ abstract class CreateSampleTask : DefaultTask() {
         if (!appBuildText.contains("implementation(project(\":samples:$sName\"))")) {
             appBuildFile.writeText(
                 appBuildText.replace(
-                    "    implementation(project(\":core-theme\"))",
-                    "    implementation(project(\":core-theme\"))\n" +
+                    "    implementation(project(\":core-ui\"))",
+                    "    implementation(project(\":core-ui\"))\n" +
                         "    implementation(project(\":samples:$sName\"))",
                 ),
             )
@@ -579,16 +565,4 @@ private fun BoxScope.PreviewingContent(onBack: () -> Unit) {
     // TODO: Add this sample's controls here.
 }
 """.trimStart()
-}
-
-tasks.register<CreateSampleTask>("createSample") {
-    description = "Generates a new compose-first camera sample for the Camera Samples Catalog"
-    group = "generation"
-
-    sampleName.set(providers.gradleProperty("sampleName"))
-    screenName.set(providers.gradleProperty("screenName"))
-    title.set(providers.gradleProperty("title"))
-    desc.set(providers.gradleProperty("desc"))
-    type.set(providers.gradleProperty("type"))
-    rootDirPath.set(rootDir.absolutePath)
 }
