@@ -238,8 +238,6 @@ class CameraXRawCaptureController(
             fullSupported = true
         }
 
-        // On Google Pixel and multi-camera devices, the default logical camera ID ("0") might hide
-        // ULTRA_HIGH_RESOLUTION_SENSOR. Query the underlying physical camera IDs to discover native 50MP streams.
         if (!fullSupported && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P && logicalChars != null && cameraManager != null) {
             val physicalIds = logicalChars.physicalCameraIds
             for (physicalId in physicalIds) {
