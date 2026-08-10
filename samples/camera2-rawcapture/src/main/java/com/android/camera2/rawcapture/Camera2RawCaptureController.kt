@@ -34,12 +34,14 @@ import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
 import android.util.Log
+import android.util.Size
 import android.view.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import com.android.camera.core.camera2.BaseCamera2Controller
 import com.android.camera.core.media.MediaStoreSaver
 import java.io.File
 import java.io.FileOutputStream
@@ -56,15 +58,20 @@ fun rememberCamera2RawCaptureController(
     context: Context,
     isFrontCamera: Boolean,
     onDngSaved: (uri: Uri, rotationDegrees: Int) -> Unit,
+    onCapabilitiesReady: (isFullSensorSupported: Boolean, pixelBinLabel: String, fullSensorLabel: String) -> Unit,
     onUnsupported: () -> Unit,
 ): Camera2RawCaptureController {
     val latestOnDngSaved by rememberUpdatedState(onDngSaved)
+    val latestOnCapabilitiesReady by rememberUpdatedState(onCapabilitiesReady)
     val latestOnUnsupported by rememberUpdatedState(onUnsupported)
     return remember(context, isFrontCamera) {
         Camera2RawCaptureController(
             context,
             isFrontCamera,
             onDngSaved = { uri, rotationDegrees -> latestOnDngSaved(uri, rotationDegrees) },
+            onCapabilitiesReady = { isFullSupported, pixelBin, fullSensor ->
+                latestOnCapabilitiesReady(isFullSupported, pixelBin, fullSensor)
+            },
             onUnsupported = { latestOnUnsupported() },
         )
     }
@@ -72,20 +79,28 @@ fun rememberCamera2RawCaptureController(
 
 /**
  * Captures a single `RAW_SENSOR` frame and writes it as a DNG via [DngCreator]. The shared
- * open/close/transform plumbing lives in [com.android.camera.core.camera2.BaseCamera2Controller];
+ * open/close/transform plumbing lives in [BaseCamera2Controller];
  * this class gates on the camera's RAW capability, adds a `RAW_SENSOR` [ImageReader], and pairs each
- * captured [Image] with its [TotalCaptureResult] (DngCreator needs both) before saving. All work
- * happens on the controller's background handler.
+ * captured [Image] with its [TotalCaptureResult] (DngCreator needs both) before saving.
+ * Supports toggling between standard pixel-binned mode and full sensor native resolution mode.
+ * All work happens on the controller's background handler.
  */
 @Stable
 class Camera2RawCaptureController(
     context: Context,
     isFrontCamera: Boolean,
     private val onDngSaved: (uri: Uri, rotationDegrees: Int) -> Unit,
+    private val onCapabilitiesReady: (isFullSensorSupported: Boolean, pixelBinLabel: String, fullSensorLabel: String) -> Unit,
     private val onUnsupported: () -> Unit,
-) : com.android.camera.core.camera2.BaseCamera2Controller(context, isFrontCamera) {
+) : BaseCamera2Controller(context, isFrontCamera) {
     private var rawReader: ImageReader? = null
     private var sensorOrientation: Int = 90
+
+    private var currentMode: RawSensorMode = RawSensorMode.PIXEL_BIN
+    private var isFullSensorSupported: Boolean = false
+    private var defaultRawSize: Size? = null
+    private var maxRawSize: Size? = null
+    private var currentPreviewSurface: Surface? = null
 
     // DngCreator needs the RAW Image and the TotalCaptureResult that produced it; they arrive on two
     // callbacks (both on the background handler), so hold each until its partner is ready.
@@ -106,16 +121,32 @@ class Camera2RawCaptureController(
             return
         }
 
-        val map = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
-        val rawSize =
-            map?.getOutputSizes(ImageFormat.RAW_SENSOR)?.maxByOrNull { it.width.toLong() * it.height }
-        if (rawSize == null) {
+        val eval = evaluateSensorCapabilities(characteristics)
+        isFullSensorSupported = eval.isFullSensorSupported
+        defaultRawSize = eval.defaultRawSize
+        maxRawSize = eval.maxRawSize
+        onCapabilitiesReady(eval.isFullSensorSupported, eval.pixelBinLabel, eval.fullSensorLabel)
+
+        val size = activeRawSize()
+        if (size == null) {
             onUnsupported()
             return
         }
 
+        createRawReader(size)
+    }
+
+    private fun activeRawSize(): Size? =
+        if (currentMode == RawSensorMode.FULL_SENSOR && isFullSensorSupported) {
+            maxRawSize ?: defaultRawSize
+        } else {
+            defaultRawSize
+        }
+
+    private fun createRawReader(size: Size) {
+        rawReader?.close()
         rawReader =
-            ImageReader.newInstance(rawSize.width, rawSize.height, ImageFormat.RAW_SENSOR, 2).apply {
+            ImageReader.newInstance(size.width, size.height, ImageFormat.RAW_SENSOR, 2).apply {
                 setOnImageAvailableListener({ reader ->
                     pendingImage = reader.acquireNextImage()
                     tryWriteDng()
@@ -127,6 +158,7 @@ class Camera2RawCaptureController(
         camera: CameraDevice,
         surface: Surface,
     ) {
+        currentPreviewSurface = surface
         val targets = mutableListOf(surface)
         rawReader?.surface?.let { targets.add(it) }
 
@@ -136,6 +168,23 @@ class Camera2RawCaptureController(
             }
 
         createCaptureSession(camera, targets) { startRepeatingRequest() }
+    }
+
+    fun setSensorMode(mode: RawSensorMode) {
+        if (currentMode == mode) return
+        currentMode = mode
+        backgroundHandler.post {
+            val camera = cameraDevice ?: return@post
+            val surface = currentPreviewSurface ?: return@post
+            val size = activeRawSize() ?: return@post
+
+            createRawReader(size)
+
+            val targets = mutableListOf(surface)
+            rawReader?.surface?.let { targets.add(it) }
+
+            createCaptureSession(camera, targets) { startRepeatingRequest() }
+        }
     }
 
     private fun startRepeatingRequest() {
@@ -163,6 +212,19 @@ class Camera2RawCaptureController(
                 device.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE).apply {
                     addTarget(reader.surface)
                     set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
+                    if (currentMode == RawSensorMode.FULL_SENSOR && isFullSensorSupported) {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                            set(
+                                CaptureRequest.SENSOR_PIXEL_MODE,
+                                CameraMetadata.SENSOR_PIXEL_MODE_MAXIMUM_RESOLUTION,
+                            )
+                        }
+                    } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                        set(
+                            CaptureRequest.SENSOR_PIXEL_MODE,
+                            CameraMetadata.SENSOR_PIXEL_MODE_DEFAULT,
+                        )
+                    }
                 }
             session.capture(
                 captureBuilder.build(),
@@ -180,6 +242,108 @@ class Camera2RawCaptureController(
             )
         } catch (e: CameraAccessException) {
             Log.e(TAG, "Failed to capture RAW", e)
+        }
+    }
+
+    private fun evaluateSensorCapabilities(characteristics: CameraCharacteristics): SensorCapabilities {
+        val caps = characteristics.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES)
+        var fullSupported =
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                caps?.contains(
+                    CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_ULTRA_HIGH_RESOLUTION_SENSOR,
+                ) == true
+            } else {
+                false
+            }
+
+        val streamMap = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+        val defaultRawSize =
+            streamMap?.getOutputSizes(ImageFormat.RAW_SENSOR)?.maxByOrNull { it.width.toLong() * it.height }
+        val pixelBinLabel = defaultRawSize?.let { formatMegapixels(it.width, it.height) } ?: ""
+
+        var maxRawSize =
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                val maxResStreamMap =
+                    characteristics.get(
+                        CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP_MAXIMUM_RESOLUTION,
+                    )
+                maxResStreamMap?.getOutputSizes(ImageFormat.RAW_SENSOR)?.maxByOrNull {
+                    it.width.toLong() * it.height
+                }
+            } else {
+                null
+            }
+
+        if (maxRawSize != null) {
+            fullSupported = true
+        }
+
+        if (!fullSupported && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            val physicalIds = characteristics.physicalCameraIds
+            for (physicalId in physicalIds) {
+                try {
+                    val physicalChars = cameraManager.getCameraCharacteristics(physicalId)
+                    val physicalCaps =
+                        physicalChars.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES)
+                    val physicalHasUltra =
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                            physicalCaps?.contains(
+                                CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_ULTRA_HIGH_RESOLUTION_SENSOR,
+                            ) == true
+                        } else {
+                            false
+                        }
+
+                    val physicalMaxMap =
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                            physicalChars.get(
+                                CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP_MAXIMUM_RESOLUTION,
+                            )
+                        } else {
+                            null
+                        }
+                    val physicalMaxSize =
+                        physicalMaxMap?.getOutputSizes(ImageFormat.RAW_SENSOR)?.maxByOrNull {
+                            it.width.toLong() * it.height
+                        }
+
+                    if (physicalHasUltra || physicalMaxSize != null) {
+                        fullSupported = true
+                        if (maxRawSize == null ||
+                            (
+                                physicalMaxSize != null &&
+                                    physicalMaxSize.width.toLong() * physicalMaxSize.height > maxRawSize.width.toLong() * maxRawSize.height
+                            )
+                        ) {
+                            maxRawSize = physicalMaxSize
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Failed to query physical camera $physicalId", e)
+                }
+            }
+        }
+
+        val fullSensorLabel = maxRawSize?.let { formatMegapixels(it.width, it.height) } ?: ""
+
+        return SensorCapabilities(
+            isFullSensorSupported = fullSupported,
+            defaultRawSize = defaultRawSize,
+            maxRawSize = maxRawSize,
+            pixelBinLabel = pixelBinLabel,
+            fullSensorLabel = fullSensorLabel,
+        )
+    }
+
+    private fun formatMegapixels(
+        width: Int,
+        height: Int,
+    ): String {
+        val mp = (width.toLong() * height) / 1_000_000.0
+        return if (mp >= 10.0 && mp % 1.0 < 0.05) {
+            String.format(Locale.US, "%.0f MP", mp)
+        } else {
+            String.format(Locale.US, "%.1f MP", mp)
         }
     }
 
@@ -274,5 +438,14 @@ class Camera2RawCaptureController(
         pendingResult = null
         rawReader?.close()
         rawReader = null
+        currentPreviewSurface = null
     }
 }
+
+private data class SensorCapabilities(
+    val isFullSensorSupported: Boolean,
+    val defaultRawSize: Size?,
+    val maxRawSize: Size?,
+    val pixelBinLabel: String,
+    val fullSensorLabel: String,
+)

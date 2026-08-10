@@ -17,10 +17,21 @@ package com.android.camerax.rawcapture
 
 import android.net.Uri
 
+enum class RawSensorMode {
+    PIXEL_BIN,
+    FULL_SENSOR,
+}
+
 sealed interface CameraXRawCaptureUiState {
     data object Initial : CameraXRawCaptureUiState
 
-    data object Previewing : CameraXRawCaptureUiState
+    data class Previewing(
+        val selectedMode: RawSensorMode = RawSensorMode.PIXEL_BIN,
+        val isFullSensorSupported: Boolean = false,
+        val pixelBinResolutionLabel: String = "",
+        val fullSensorResolutionLabel: String = "",
+        val showSettings: Boolean = false,
+    ) : CameraXRawCaptureUiState
 
     /**
      * A single shutter press produced two files: a RAW [dngUri] (`image/x-adobe-dng`) and a
@@ -30,6 +41,7 @@ sealed interface CameraXRawCaptureUiState {
     data class Captured(
         val dngUri: Uri,
         val jpegUri: Uri,
+        val mode: RawSensorMode = RawSensorMode.PIXEL_BIN,
     ) : CameraXRawCaptureUiState
 
     /** The camera does not advertise RAW + JPEG simultaneous output (e.g. most emulators). */

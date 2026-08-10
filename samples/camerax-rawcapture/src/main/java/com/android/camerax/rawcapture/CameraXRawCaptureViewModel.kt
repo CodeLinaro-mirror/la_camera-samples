@@ -27,6 +27,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.receiveAsFlow
+import kotlinx.coroutines.flow.update
 import javax.inject.Inject
 
 @HiltViewModel
@@ -44,7 +45,45 @@ class CameraXRawCaptureViewModel
 
         fun initialize() {
             if (_uiState.value is CameraXRawCaptureUiState.Initial) {
-                _uiState.value = CameraXRawCaptureUiState.Previewing
+                _uiState.value = CameraXRawCaptureUiState.Previewing()
+            }
+        }
+
+        fun onCapabilitiesEvaluated(
+            isFullSensorSupported: Boolean,
+            pixelBinLabel: String,
+            fullSensorLabel: String,
+        ) {
+            _uiState.update { current ->
+                if (current is CameraXRawCaptureUiState.Previewing) {
+                    current.copy(
+                        isFullSensorSupported = isFullSensorSupported,
+                        pixelBinResolutionLabel = pixelBinLabel,
+                        fullSensorResolutionLabel = fullSensorLabel,
+                    )
+                } else {
+                    current
+                }
+            }
+        }
+
+        fun selectMode(mode: RawSensorMode) {
+            _uiState.update { current ->
+                if (current is CameraXRawCaptureUiState.Previewing) {
+                    current.copy(selectedMode = mode, showSettings = false)
+                } else {
+                    current
+                }
+            }
+        }
+
+        fun setSettingsVisible(visible: Boolean) {
+            _uiState.update { current ->
+                if (current is CameraXRawCaptureUiState.Previewing) {
+                    current.copy(showSettings = visible)
+                } else {
+                    current
+                }
             }
         }
 
@@ -56,7 +95,10 @@ class CameraXRawCaptureViewModel
             dngUri: Uri,
             jpegUri: Uri,
         ) {
-            _uiState.value = CameraXRawCaptureUiState.Captured(dngUri, jpegUri)
+            val currentMode =
+                (_uiState.value as? CameraXRawCaptureUiState.Previewing)?.selectedMode
+                    ?: RawSensorMode.PIXEL_BIN
+            _uiState.value = CameraXRawCaptureUiState.Captured(dngUri, jpegUri, currentMode)
             _events.trySend(SaveEvent.Saved)
         }
 
@@ -70,10 +112,12 @@ class CameraXRawCaptureViewModel
         }
 
         fun resetToCamera() {
-            _uiState.value = CameraXRawCaptureUiState.Previewing
+            val previous = (_uiState.value as? CameraXRawCaptureUiState.Captured)
+            val previousMode = previous?.mode ?: RawSensorMode.PIXEL_BIN
+            _uiState.value = CameraXRawCaptureUiState.Previewing(selectedMode = previousMode)
         }
 
         fun resetError() {
-            _uiState.value = CameraXRawCaptureUiState.Previewing
+            _uiState.value = CameraXRawCaptureUiState.Previewing()
         }
     }

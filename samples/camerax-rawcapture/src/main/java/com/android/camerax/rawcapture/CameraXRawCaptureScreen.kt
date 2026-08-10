@@ -22,18 +22,61 @@ import android.graphics.ImageDecoder
 import android.net.Uri
 import android.os.Build
 import androidx.activity.compose.LocalOnBackPressedDispatcherOwner
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.em
+import androidx.compose.ui.unit.sp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -42,12 +85,17 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.android.camera.core.camerax.CameraXPreview
 import com.android.camera.core.display.rememberDisplayRotation
 import com.android.camera.core.permissions.CameraPermissions
+import com.android.camera.coretheme.bodyFontFamily
+import com.android.camera.coretheme.monoFontFamily
 import com.android.camera.coreui.controls.CameraControlsBar
+import com.android.camera.coreui.controls.ScrimIconButton
 import com.android.camera.coreui.controls.ShutterButton
 import com.android.camera.coreui.feedback.ObserveSaveEvents
 import com.android.camera.coreui.overlay.RuleOfThirdsGrid
+import com.android.camera.coreui.overlay.SettingsDropdown
+import com.android.camera.coreui.overlay.SettingsHeader
+import com.android.camera.coreui.overlay.SettingsOverlay
 import com.android.camera.coreui.overlay.ViewfinderTopBar
-import com.android.camera.coreui.preview.CapturedImagePreview
 import com.android.camera.coreui.scaffold.CameraApi
 import com.android.camera.coreui.scaffold.CameraSampleScaffold
 import com.android.camera.coreui.state.ErrorView
@@ -55,12 +103,10 @@ import com.android.camera.coreui.state.LoadingView
 import com.android.camera.coreui.state.UnsupportedView
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.util.Locale
 
 @Composable
-fun CameraXRawCaptureScreen(
-    viewModel: CameraXRawCaptureViewModel =
-        hiltViewModel(),
-) {
+fun CameraXRawCaptureScreen(viewModel: CameraXRawCaptureViewModel = hiltViewModel()) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val backDispatcher = LocalOnBackPressedDispatcherOwner.current?.onBackPressedDispatcher
     val onBack = { backDispatcher?.onBackPressed() ?: Unit }
@@ -83,8 +129,10 @@ fun CameraXRawCaptureScreen(
                 ErrorView(errorMessage = state.errorMessage, onRetry = viewModel::resetError)
             }
 
-            CameraXRawCaptureUiState.Previewing -> {
+            is CameraXRawCaptureUiState.Previewing -> {
                 PreviewingContent(
+                    state = state,
+                    viewModel = viewModel,
                     onCaptured = viewModel::captured,
                     onUnsupported = viewModel::setUnsupported,
                     onBack = onBack,
@@ -104,6 +152,8 @@ fun CameraXRawCaptureScreen(
 
 @Composable
 private fun BoxScope.PreviewingContent(
+    state: CameraXRawCaptureUiState.Previewing,
+    viewModel: CameraXRawCaptureViewModel,
     onCaptured: (dngUri: Uri, jpegUri: Uri) -> Unit,
     onUnsupported: () -> Unit,
     onBack: () -> Unit,
@@ -115,6 +165,7 @@ private fun BoxScope.PreviewingContent(
             context = context,
             lifecycleOwner = lifecycleOwner,
             onCaptured = onCaptured,
+            onCapabilitiesReady = viewModel::onCapabilitiesEvaluated,
             onUnsupported = onUnsupported,
         )
     val displayRotation = rememberDisplayRotation()
@@ -128,7 +179,7 @@ private fun BoxScope.PreviewingContent(
             LifecycleEventObserver { _, event ->
                 when (event) {
                     Lifecycle.Event.ON_CREATE, Lifecycle.Event.ON_RESUME -> {
-                        controller.openCamera()
+                        controller.openCamera(state.selectedMode)
                     }
 
                     Lifecycle.Event.ON_PAUSE -> {
@@ -155,17 +206,68 @@ private fun BoxScope.PreviewingContent(
         title = stringResource(R.string.rawcapture_title),
         onClose = onBack,
         closeIcon = Icons.AutoMirrored.Filled.ArrowBack,
+        actions = {
+            ScrimIconButton(
+                onClick = { viewModel.setSettingsVisible(true) },
+                imageVector = Icons.Filled.Settings,
+                contentDescription = stringResource(R.string.rawcapture_settings_button),
+                size = 34.dp,
+                iconSize = 18.dp,
+            )
+        },
     )
 
     CameraControlsBar(
         modifier = Modifier.align(Alignment.BottomCenter),
         center = { ShutterButton(onClick = controller::takePicture) },
     )
+
+    val pixelBinSummary =
+        state.pixelBinResolutionLabel.ifEmpty {
+            context.getString(R.string.rawcapture_mode_default_fallback)
+        }
+    val fullSensorSummary =
+        state.fullSensorResolutionLabel.ifEmpty {
+            context.getString(R.string.rawcapture_mode_max_fallback)
+        }
+
+    val options =
+        if (state.isFullSensorSupported) {
+            listOf(RawSensorMode.PIXEL_BIN, RawSensorMode.FULL_SENSOR)
+        } else {
+            listOf(RawSensorMode.PIXEL_BIN)
+        }
+
+    SettingsOverlay(
+        visible = state.showSettings,
+        onDismiss = { viewModel.setSettingsVisible(false) },
+    ) {
+        SettingsHeader(text = stringResource(R.string.rawcapture_settings_title))
+        SettingsDropdown(
+            label = stringResource(R.string.rawcapture_mode_label),
+            options = options,
+            selected = state.selectedMode,
+            onSelected = { mode ->
+                viewModel.selectMode(mode)
+                controller.setSensorMode(mode)
+            },
+            optionLabel = { mode ->
+                when (mode) {
+                    RawSensorMode.PIXEL_BIN -> {
+                        context.getString(R.string.rawcapture_mode_pixel_bin, pixelBinSummary)
+                    }
+
+                    RawSensorMode.FULL_SENSOR -> {
+                        context.getString(R.string.rawcapture_mode_full_sensor, fullSensorSummary)
+                    }
+                }
+            },
+        )
+    }
 }
 
 /**
- * Reviews the capture by decoding the companion JPEG to a [Bitmap] (the DNG is preserved on disk but
- * not all devices can decode it in-app). Retake deletes both saved files; Done leaves the sample.
+ * Reviews the capture with interactive pinch-to-zoom and panning.
  */
 @Composable
 private fun BoxScope.CapturedReview(
@@ -182,10 +284,224 @@ private fun BoxScope.CapturedReview(
     if (current == null) {
         LoadingView()
     } else {
-        CapturedImagePreview(
+        ZoomableCapturedImagePreview(
             bitmap = current,
             onRetake = onRetake,
             onDone = onDone,
+        )
+    }
+}
+
+@Composable
+private fun ZoomableCapturedImagePreview(
+    bitmap: Bitmap,
+    onRetake: () -> Unit,
+    onDone: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var scale by remember { mutableFloatStateOf(1f) }
+    var offset by remember { mutableStateOf(Offset.Zero) }
+
+    val mp = (bitmap.width.toLong() * bitmap.height) / 1_000_000.0
+    val mpLabel =
+        if (mp >= 10.0 && mp % 1.0 < 0.05) {
+            String.format(Locale.US, "%.0f MP", mp)
+        } else {
+            String.format(Locale.US, "%.1f MP", mp)
+        }
+
+    Box(
+        modifier =
+            modifier
+                .fillMaxSize()
+                .background(Color.Black),
+    ) {
+        Box(
+            modifier =
+                Modifier
+                    .fillMaxSize()
+                    .clipToBounds()
+                    .pointerInput(Unit) {
+                        detectTapGestures(
+                            onDoubleTap = { tapOffset ->
+                                if (scale > 1.2f) {
+                                    scale = 1f
+                                    offset = Offset.Zero
+                                } else {
+                                    scale = 3.5f
+                                    val maxOffsetX = (size.width * (3.5f - 1f)) / 2f
+                                    val maxOffsetY = (size.height * (3.5f - 1f)) / 2f
+                                    val centerX = size.width / 2f
+                                    val centerY = size.height / 2f
+                                    offset =
+                                        Offset(
+                                            x =
+                                                ((centerX - tapOffset.x) * (3.5f - 1f)).coerceIn(
+                                                    -maxOffsetX,
+                                                    maxOffsetX,
+                                                ),
+                                            y =
+                                                ((centerY - tapOffset.y) * (3.5f - 1f)).coerceIn(
+                                                    -maxOffsetY,
+                                                    maxOffsetY,
+                                                ),
+                                        )
+                                }
+                            },
+                        )
+                    }.pointerInput(Unit) {
+                        detectTransformGestures { _, pan, zoom, _ ->
+                            val newScale = (scale * zoom).coerceIn(1f, 8f)
+                            scale = newScale
+                            val maxOffsetX = (size.width * (newScale - 1f)) / 2f
+                            val maxOffsetY = (size.height * (newScale - 1f)) / 2f
+                            offset =
+                                if (newScale > 1f) {
+                                    Offset(
+                                        x = (offset.x + pan.x).coerceIn(-maxOffsetX, maxOffsetX),
+                                        y = (offset.y + pan.y).coerceIn(-maxOffsetY, maxOffsetY),
+                                    )
+                                } else {
+                                    Offset.Zero
+                                }
+                        }
+                    },
+        ) {
+            Image(
+                bitmap = bitmap.asImageBitmap(),
+                contentDescription = "Captured Photo",
+                modifier =
+                    Modifier
+                        .fillMaxSize()
+                        .graphicsLayer {
+                            scaleX = scale
+                            scaleY = scale
+                            translationX = offset.x
+                            translationY = offset.y
+                        },
+                contentScale = ContentScale.Fit,
+            )
+        }
+
+        ScrimIconButton(
+            onClick = onDone,
+            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+            contentDescription = "Back",
+            size = 34.dp,
+            iconSize = 18.dp,
+            modifier =
+                Modifier
+                    .align(Alignment.TopStart)
+                    .statusBarsPadding()
+                    .padding(16.dp),
+        )
+
+        if (scale > 1.05f) {
+            Text(
+                text = String.format(Locale.US, "%.1fx", scale),
+                style =
+                    TextStyle(
+                        fontFamily = monoFontFamily,
+                        fontSize = 12.sp,
+                        letterSpacing = 0.06.em,
+                    ),
+                color = MaterialTheme.colorScheme.primary,
+                modifier =
+                    Modifier
+                        .align(Alignment.TopEnd)
+                        .statusBarsPadding()
+                        .padding(16.dp),
+            )
+        }
+
+        Text(
+            text = "${bitmap.width} × ${bitmap.height} • $mpLabel",
+            style =
+                TextStyle(
+                    fontFamily = monoFontFamily,
+                    fontSize = 10.sp,
+                    letterSpacing = 0.06.em,
+                ),
+            color = Color.White.copy(alpha = 0.55f),
+            modifier =
+                Modifier
+                    .align(Alignment.BottomStart)
+                    .navigationBarsPadding()
+                    .padding(start = 20.dp, bottom = 100.dp),
+        )
+
+        Row(
+            modifier =
+                Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .navigationBarsPadding()
+                    .padding(start = 16.dp, end = 16.dp, bottom = 24.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            ReviewActionPill(
+                modifier = Modifier.weight(1f),
+                icon = Icons.Filled.Refresh,
+                label = "Retake",
+                filled = false,
+                onClick = onRetake,
+            )
+            ReviewActionPill(
+                modifier = Modifier.weight(1f),
+                icon = Icons.Filled.Check,
+                label = "Done",
+                filled = true,
+                onClick = onDone,
+            )
+        }
+    }
+}
+
+@Composable
+private fun ReviewActionPill(
+    icon: ImageVector,
+    label: String,
+    filled: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val accent = MaterialTheme.colorScheme.primary
+    val shape = RoundedCornerShape(26.dp)
+    val contentColor = if (filled) MaterialTheme.colorScheme.onPrimary else Color.White
+    val base =
+        modifier
+            .height(52.dp)
+            .clip(shape)
+    val styled =
+        if (filled) {
+            base.background(accent)
+        } else {
+            base
+                .background(Color.White.copy(alpha = 0.04f))
+                .border(1.dp, Color.White.copy(alpha = 0.22f), shape)
+        }
+    Row(
+        modifier = styled.clickable(onClick = onClick),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = contentColor,
+            modifier = Modifier.size(18.dp),
+        )
+        Spacer(modifier = Modifier.width(8.dp))
+        Text(
+            text = label,
+            style =
+                TextStyle(
+                    fontFamily = bodyFontFamily,
+                    fontSize = 14.sp,
+                    fontWeight = if (filled) FontWeight.Bold else FontWeight.Medium,
+                ),
+            color = contentColor,
         )
     }
 }
