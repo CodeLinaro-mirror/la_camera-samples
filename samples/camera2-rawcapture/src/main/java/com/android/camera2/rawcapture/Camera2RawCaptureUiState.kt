@@ -17,10 +17,21 @@ package com.android.camera2.rawcapture
 
 import android.net.Uri
 
+enum class RawSensorMode {
+    PIXEL_BIN,
+    FULL_SENSOR,
+}
+
 sealed interface Camera2RawCaptureUiState {
     data object Initial : Camera2RawCaptureUiState
 
-    data object Previewing : Camera2RawCaptureUiState
+    data class Previewing(
+        val selectedMode: RawSensorMode = RawSensorMode.PIXEL_BIN,
+        val isFullSensorSupported: Boolean = false,
+        val pixelBinResolutionLabel: String = "",
+        val fullSensorResolutionLabel: String = "",
+        val showSettings: Boolean = false,
+    ) : Camera2RawCaptureUiState
 
     /**
      * Reviewing/editing a just-captured DNG. [dngUri] is the saved file and [rotationDegrees] is the
@@ -29,6 +40,7 @@ sealed interface Camera2RawCaptureUiState {
     data class Editing(
         val dngUri: Uri,
         val rotationDegrees: Int,
+        val mode: RawSensorMode = RawSensorMode.PIXEL_BIN,
     ) : Camera2RawCaptureUiState
 
     /** Shown when the camera does not advertise the RAW capability. */

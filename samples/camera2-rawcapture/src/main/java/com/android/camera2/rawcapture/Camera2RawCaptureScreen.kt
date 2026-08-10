@@ -15,10 +15,12 @@
  */
 package com.android.camera2.rawcapture
 
+import android.net.Uri
 import androidx.activity.compose.LocalOnBackPressedDispatcherOwner
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -33,8 +35,12 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.android.camera.core.camera2.Camera2Preview
 import com.android.camera.core.permissions.CameraPermissions
 import com.android.camera.coreui.controls.CameraControlsBar
+import com.android.camera.coreui.controls.ScrimIconButton
 import com.android.camera.coreui.controls.ShutterButton
 import com.android.camera.coreui.overlay.RuleOfThirdsGrid
+import com.android.camera.coreui.overlay.SettingsDropdown
+import com.android.camera.coreui.overlay.SettingsHeader
+import com.android.camera.coreui.overlay.SettingsOverlay
 import com.android.camera.coreui.overlay.ViewfinderTopBar
 import com.android.camera.coreui.scaffold.CameraApi
 import com.android.camera.coreui.scaffold.CameraSampleScaffold
@@ -43,10 +49,7 @@ import com.android.camera.coreui.state.LoadingView
 import com.android.camera.coreui.state.UnsupportedView
 
 @Composable
-fun Camera2RawCaptureScreen(
-    viewModel: Camera2RawCaptureViewModel =
-        hiltViewModel(),
-) {
+fun Camera2RawCaptureScreen(viewModel: Camera2RawCaptureViewModel = hiltViewModel()) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val backDispatcher = LocalOnBackPressedDispatcherOwner.current?.onBackPressedDispatcher
     val onBack = { backDispatcher?.onBackPressed() ?: Unit }
@@ -67,8 +70,10 @@ fun Camera2RawCaptureScreen(
                 ErrorView(errorMessage = state.errorMessage, onRetry = viewModel::resetError)
             }
 
-            Camera2RawCaptureUiState.Previewing -> {
+            is Camera2RawCaptureUiState.Previewing -> {
                 PreviewingContent(
+                    state = state,
+                    viewModel = viewModel,
                     onDngSaved = viewModel::onDngSaved,
                     onUnsupported = viewModel::setUnsupported,
                     onBack = onBack,
@@ -88,7 +93,9 @@ fun Camera2RawCaptureScreen(
 
 @Composable
 private fun BoxScope.PreviewingContent(
-    onDngSaved: (android.net.Uri, Int) -> Unit,
+    state: Camera2RawCaptureUiState.Previewing,
+    viewModel: Camera2RawCaptureViewModel,
+    onDngSaved: (Uri, Int) -> Unit,
     onUnsupported: () -> Unit,
     onBack: () -> Unit,
 ) {
@@ -98,6 +105,7 @@ private fun BoxScope.PreviewingContent(
             context = context,
             isFrontCamera = false,
             onDngSaved = onDngSaved,
+            onCapabilitiesReady = viewModel::onCapabilitiesEvaluated,
             onUnsupported = onUnsupported,
         )
 
@@ -113,10 +121,62 @@ private fun BoxScope.PreviewingContent(
         title = stringResource(R.string.rawcapture_title),
         onClose = onBack,
         closeIcon = Icons.AutoMirrored.Filled.ArrowBack,
+        actions = {
+            ScrimIconButton(
+                onClick = { viewModel.setSettingsVisible(true) },
+                imageVector = Icons.Filled.Settings,
+                contentDescription = stringResource(R.string.rawcapture_settings_button),
+                size = 34.dp,
+                iconSize = 18.dp,
+            )
+        },
     )
 
     CameraControlsBar(
         modifier = Modifier.align(Alignment.BottomCenter),
         center = { ShutterButton(onClick = controller::captureRaw) },
     )
+
+    val pixelBinSummary =
+        state.pixelBinResolutionLabel.ifEmpty {
+            context.getString(R.string.rawcapture_mode_default_fallback)
+        }
+    val fullSensorSummary =
+        state.fullSensorResolutionLabel.ifEmpty {
+            context.getString(R.string.rawcapture_mode_max_fallback)
+        }
+
+    val options =
+        if (state.isFullSensorSupported) {
+            listOf(RawSensorMode.PIXEL_BIN, RawSensorMode.FULL_SENSOR)
+        } else {
+            listOf(RawSensorMode.PIXEL_BIN)
+        }
+
+    SettingsOverlay(
+        visible = state.showSettings,
+        onDismiss = { viewModel.setSettingsVisible(false) },
+    ) {
+        SettingsHeader(text = stringResource(R.string.rawcapture_settings_title))
+        SettingsDropdown(
+            label = stringResource(R.string.rawcapture_mode_label),
+            options = options,
+            selected = state.selectedMode,
+            onSelected = { mode ->
+                viewModel.selectMode(mode)
+                controller.setSensorMode(mode)
+            },
+            optionLabel = { mode ->
+                when (mode) {
+                    RawSensorMode.PIXEL_BIN -> {
+                        context.getString(R.string.rawcapture_mode_pixel_bin, pixelBinSummary)
+                    }
+
+                    RawSensorMode.FULL_SENSOR -> {
+                        context.getString(R.string.rawcapture_mode_full_sensor, fullSensorSummary)
+                    }
+                }
+            },
+        )
+    }
 }

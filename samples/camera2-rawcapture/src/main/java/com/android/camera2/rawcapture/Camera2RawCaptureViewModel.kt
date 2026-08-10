@@ -21,6 +21,7 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import javax.inject.Inject
 
 @HiltViewModel
@@ -33,7 +34,45 @@ class Camera2RawCaptureViewModel
 
         fun initialize() {
             if (_uiState.value is Camera2RawCaptureUiState.Initial) {
-                _uiState.value = Camera2RawCaptureUiState.Previewing
+                _uiState.value = Camera2RawCaptureUiState.Previewing()
+            }
+        }
+
+        fun onCapabilitiesEvaluated(
+            isFullSensorSupported: Boolean,
+            pixelBinLabel: String,
+            fullSensorLabel: String,
+        ) {
+            _uiState.update { current ->
+                if (current is Camera2RawCaptureUiState.Previewing) {
+                    current.copy(
+                        isFullSensorSupported = isFullSensorSupported,
+                        pixelBinResolutionLabel = pixelBinLabel,
+                        fullSensorResolutionLabel = fullSensorLabel,
+                    )
+                } else {
+                    current
+                }
+            }
+        }
+
+        fun selectMode(mode: RawSensorMode) {
+            _uiState.update { current ->
+                if (current is Camera2RawCaptureUiState.Previewing) {
+                    current.copy(selectedMode = mode, showSettings = false)
+                } else {
+                    current
+                }
+            }
+        }
+
+        fun setSettingsVisible(visible: Boolean) {
+            _uiState.update { current ->
+                if (current is Camera2RawCaptureUiState.Previewing) {
+                    current.copy(showSettings = visible)
+                } else {
+                    current
+                }
             }
         }
 
@@ -45,11 +84,16 @@ class Camera2RawCaptureViewModel
             uri: Uri,
             rotationDegrees: Int,
         ) {
-            _uiState.value = Camera2RawCaptureUiState.Editing(uri, rotationDegrees)
+            val currentMode =
+                (_uiState.value as? Camera2RawCaptureUiState.Previewing)?.selectedMode
+                    ?: RawSensorMode.PIXEL_BIN
+            _uiState.value = Camera2RawCaptureUiState.Editing(uri, rotationDegrees, currentMode)
         }
 
         fun backToCamera() {
-            _uiState.value = Camera2RawCaptureUiState.Previewing
+            val previous = (_uiState.value as? Camera2RawCaptureUiState.Editing)
+            val previousMode = previous?.mode ?: RawSensorMode.PIXEL_BIN
+            _uiState.value = Camera2RawCaptureUiState.Previewing(selectedMode = previousMode)
         }
 
         fun showError(message: String) {
@@ -57,6 +101,6 @@ class Camera2RawCaptureViewModel
         }
 
         fun resetError() {
-            _uiState.value = Camera2RawCaptureUiState.Previewing
+            _uiState.value = Camera2RawCaptureUiState.Previewing()
         }
     }
